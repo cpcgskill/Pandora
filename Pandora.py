@@ -18,9 +18,6 @@ if False:
 
 import os
 
-if False:
-    from typing import *
-
 import torch
 import torch.nn as nn
 
@@ -28,6 +25,8 @@ import tqdm
 
 import accelerate
 from accelerate.local_sgd import LocalSGD
+
+import matplotlib.pyplot as plt
 
 from data_admin import get_dataset
 from SkipGram import get_tokenizer, get_embedding
@@ -106,7 +105,7 @@ class MMModel(nn.Module):
                  ):
         super(MMModel, self).__init__()
         self.gpt = GPT(embed_size, heads, embed_size * 4, num_layers)
-        # self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
         self.res_net = ResNet(embed_size, res_net_block_num, res_net_block_layer_num, bias=False)
         self.fc_out = nn.Linear(embed_size, vocab_size)
 
@@ -117,7 +116,7 @@ class MMModel(nn.Module):
         :param mask: [seq_len, seq_len]
         :return:
         """
-        # x = self.dropout(x)
+        x = self.dropout(x)
         out = self.gpt(x, attn_mask=mask)
         out = self.res_net(out)
         out = self.fc_out(out)
@@ -212,8 +211,6 @@ class TrainCtx:
 
 
 def print_loss_list_graph(loss_list):
-    import matplotlib.pyplot as plt
-
     x = range(len(loss_list))
     y = loss_list
 
@@ -228,8 +225,6 @@ def print_loss_list_graph(loss_list):
 
 
 def save_loss_list_graph(loss_list, path):
-    import matplotlib.pyplot as plt
-
     x = range(len(loss_list))
     y = loss_list
 
@@ -241,6 +236,29 @@ def save_loss_list_graph(loss_list, path):
     plt.ylabel("loss")
 
     plt.savefig(path)
+
+
+def generate_mask(seq_len, device):
+    """
+    mask:
+    [
+     [-inf, -inf, -inf, ..., -inf, -inf, -inf],
+     [0, -inf,    -inf, ..., -inf, -inf, -inf],
+     [0, 0,    -inf, ...,    -inf, -inf, -inf],
+     ...
+     [0, 0,    0, ...,    0,    0,    -inf]
+    ]
+    ps: right mask need hide now token
+
+    :param seq_len:
+    :param device:
+    :return:
+    """
+    mask = torch.zeros([seq_len, seq_len])
+    # set diagonal and above diagonal to -inf
+    for i in range(seq_len):
+        mask[i, i:] = -torch.inf
+    return mask.to(device)
 
 
 def train_transformer():
@@ -291,11 +309,12 @@ def train_transformer():
     # transformer.compute()
     optimizer.zero_grad()
 
-    # 使用数据集的平均长度作为最大长度， 这个长度可以通过 get_mean_token_size() 函数获取
-    max_seq_len = 698
     # #  启用填充，最大长度为1024， 对于长度不足1024的序列，用3填充。 对于长度超过1024的序列，进行截断
     # tokenizer.enable_padding(length=max_seq_len, pad_id=3, pad_token="[PAD]")
-    #  启用截断，最大长度为1024
+
+    # 使用数据集的平均长度作为最大长度， 这个长度可以通过 get_mean_token_size() 函数获取
+    max_seq_len = 698
+    #  启用截断
     tokenizer.enable_truncation(max_length=max_seq_len)
     # make embedding
     embedding = get_embedding(tokenizer).to(accelerator.device)
@@ -321,17 +340,8 @@ def train_transformer():
                     # shape[batch_size, seq_len, embed_size] -> [seq_len, batch_size, embed_size]
                     data = data.permute(1, 0, 2)
                     label = label.permute(1, 0)
-                    # tgt_mask:
-                    # [
-                    #  [0, -inf, -inf, ..., -inf, -inf, -inf],
-                    #  [0, 0,    -inf, ..., -inf, -inf, -inf],
-                    #  [0, 0,    0, ...,    -inf, -inf, -inf],
-                    #  ...
-                    #  [0, 0,    0, ...,    0,    0,    0]
-                    # ]
-                    mask = nn.Transformer.generate_square_subsequent_mask(data.size(0))
-                    # tgt_mask = torch.triu(torch.ones(data.size(0), data.size(0)) * float('-inf'), diagonal=1)
-                    mask = mask.to(accelerator.device)
+
+                    mask = generate_mask(data.size(0), accelerator.device)
 
                 output = transformer(data, mask=mask)
                 loss = loss_function(output.view(-1, tokenizer.get_vocab_size()), label.view(-1))
@@ -460,9 +470,7 @@ def test_transformer(root='./data/transformer'):
 
             data = data.permute(1, 0, 2)
 
-            mask = torch.zeros([data.size(0), data.size(0)])
-            mask[:, -1] = -torch.inf
-            mask = mask.to(accelerator.device)
+            mask = generate_mask(data.size(0), accelerator.device)
 
             output = transformer(data, mask=mask)
             output = output + torch.randn_like(output) * 0.4
@@ -489,5 +497,5 @@ def test_transformer(root='./data/transformer'):
 
 
 if __name__ == '__main__':
-    test_transformer('/root/autodl-tmp/project/data/transformer')
-    # train_transformer()
+    # test_transformer('/root/autodl-tmp/project/data/transformer')
+    train_transformer()
