@@ -125,17 +125,27 @@ def compile_dataset(keep_in_memory=False):
     # shuffle dataset
     dataset = dataset.shuffle(1024 * 1024 * 16)
     print('dataset[0]', dataset[0])
+
+    # split dataset for train and test
+    dataset = dataset.train_test_split(test_size=0.1)
     # write to file
-    dataset.save_to_disk('./dataset')
+    dataset['train'].save_to_disk('./dataset/train')
+    dataset['test'].save_to_disk('./dataset/test')
 
 
-def get_dataset(keep_in_memory=False):
+def get_train_dataset(keep_in_memory=False):
     # load from file
-    dataset = load_from_disk('./dataset', keep_in_memory=keep_in_memory)
+    dataset = load_from_disk('./dataset/train', keep_in_memory=keep_in_memory)
+    return dataset
+
+
+def get_test_dataset(keep_in_memory=False):
+    # load from file
+    dataset = load_from_disk('./dataset/test', keep_in_memory=keep_in_memory)
     return dataset
 
 
 if __name__ == '__main__':
-    dataset = get_dataset()
+    dataset = get_train_dataset()
     print('dataset[0]', dataset[0])
     # compile_dataset()

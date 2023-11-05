@@ -58,7 +58,7 @@ def train_tokenizer():
     )
 
     data_admin = DatasetAdmin()
-    dataset = data_admin.get_dataset()
+    dataset = data_admin.get_train_dataset()
 
     tokenizer.train_from_iterator(
         iterator=(dataset[i: i + 1000]["text"] for i in range(0, len(dataset), 1000)),
@@ -117,7 +117,7 @@ def train_skip_gram():
     skip_gram = make_skip_gram(tokenizer)
     # train embedding
     data_admin = DatasetAdmin()
-    dataset = data_admin.get_dataset()
+    dataset = data_admin.get_train_dataset()
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=6144,

@@ -28,7 +28,7 @@ from accelerate.local_sgd import LocalSGD
 
 import matplotlib.pyplot as plt
 
-from data_admin import get_dataset
+from data_admin import get_train_dataset
 from SkipGram import get_tokenizer, get_embedding
 
 from utils import add_random_value_by_weights
@@ -167,7 +167,7 @@ class RotateEmbedding(nn.Module):
 
 def get_mean_token_size():
     tokenizer = get_tokenizer()
-    dataset = get_dataset(keep_in_memory=True)
+    dataset = get_train_dataset(keep_in_memory=True)
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=1024 * 800,
@@ -238,15 +238,16 @@ def save_loss_list_graph(loss_list, path):
     plt.savefig(path)
 
 
+
 def generate_mask(seq_len, device):
     """
     mask:
     [
-     [-inf, -inf, -inf, ..., -inf, -inf, -inf],
-     [0, -inf,    -inf, ..., -inf, -inf, -inf],
-     [0, 0,    -inf, ...,    -inf, -inf, -inf],
+     [0, -inf, -inf, ..., -inf, -inf, -inf],
+     [0, 0, -inf, ..., -inf, -inf, -inf],
+     [0, 0, 0, ...,    -inf, -inf, -inf],
      ...
-     [0, 0,    0, ...,    0,    0,    -inf]
+     [0, 0,    0, ...,    0,    0,    0]
     ]
     ps: right mask need hide now token
 
@@ -254,19 +255,14 @@ def generate_mask(seq_len, device):
     :param device:
     :return:
     """
-    mask = torch.zeros([seq_len, seq_len])
-    # set diagonal and above diagonal to -inf
-    for i in range(seq_len):
-        mask[i, i:] = -torch.inf
-    return mask.to(device)
-
+    return nn.Transformer.generate_square_subsequent_mask(seq_len, device)
 
 def train_transformer():
     gradient_accumulation_steps = 32
     accelerator = accelerate.Accelerator(gradient_accumulation_steps=gradient_accumulation_steps)
 
     tokenizer = get_tokenizer()
-    dataset = get_dataset(keep_in_memory=True)
+    dataset = get_train_dataset(keep_in_memory=True)
 
     transformer = new_model(tokenizer)
     initial_lr = 0.000001
@@ -333,13 +329,13 @@ def train_transformer():
                 with torch.no_grad():
                     split_data = tokenizer.encode_batch(text_data['text'])
                     label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
-                    data = embedding(label)
+                    data = embedding(label[:, :-1])
                     data = position_encoding(data)
                     data = data + torch.randn_like(data) * 0.1
 
                     # shape[batch_size, seq_len, embed_size] -> [seq_len, batch_size, embed_size]
                     data = data.permute(1, 0, 2)
-                    label = label.permute(1, 0)
+                    label = label[:, 1:].permute(1, 0)
 
                     mask = generate_mask(data.size(0), accelerator.device)
 
@@ -373,7 +369,7 @@ def train_transformer():
                 if not accelerator.is_main_process:
                     continue
                 # in main process
-                if (train_ctx.step + 1) % 10000 == 0:
+                if (train_ctx.step + 1) % 20000 == 0:
                     accelerator.print(f"\nstep: {train_ctx.step}, loss: {loss.item()}")
                     # save skip_gram
                     tqdm.tqdm.write(f"save transformer: step: {train_ctx.step}")
@@ -394,12 +390,12 @@ def train_transformer():
                     accelerator.print('result text:', text_result[0])
 
 
-def test_transformer(root='./data/transformer'):
+def check_transformer(root='./data/transformer'):
     gradient_accumulation_steps = 32
     accelerator = accelerate.Accelerator(gradient_accumulation_steps=gradient_accumulation_steps)
 
     tokenizer = get_tokenizer()
-    dataset = get_dataset(keep_in_memory=True)
+    dataset = get_train_dataset(keep_in_memory=True)
 
     transformer = new_model(tokenizer)
     initial_lr = 0.000001
@@ -462,7 +458,6 @@ def test_transformer(root='./data/transformer'):
         split_data = tokenizer.encode_batch(text_data['text'])
         label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
         label = label[:, :-1]
-        label = torch.cat([label, torch.tensor([[tokenizer.token_to_id('[MASK]')]]).to(accelerator.device)], dim=-1)
         for _ in range(500):
             data = embedding(label)
             data = position_encoding(data)
@@ -473,7 +468,7 @@ def test_transformer(root='./data/transformer'):
             mask = generate_mask(data.size(0), accelerator.device)
 
             output = transformer(data, mask=mask)
-            output = output + torch.randn_like(output) * 0.4
+            # output = output + torch.randn_like(output) * 0.4
 
             # print original text
             accelerator.print('original text:', text_data['text'][0][:100])
@@ -487,15 +482,12 @@ def test_transformer(root='./data/transformer'):
             text_result = tokenizer.decode_batch(result.permute(1, 0).tolist())
             accelerator.print('result text:', text_result[0])
 
-            # add now token to label
-            label[:, -1] = result.permute(1, 0)[:, -1]
+            # add next token mask
+            label = torch.cat([label, result.permute(1, 0)[:, -1:]], dim=-1)
 
             # output text
             print('output text:', tokenizer.decode_batch(label.tolist())[0])
-            # add next token mask
-            label = torch.cat([label, torch.tensor([[tokenizer.token_to_id('[MASK]')]]).to(accelerator.device)], dim=-1)
-
 
 if __name__ == '__main__':
-    # test_transformer('/root/autodl-tmp/project/data/transformer')
+    # check_transformer('/root/autodl-tmp/project/data/transformer')
     train_transformer()

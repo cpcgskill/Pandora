@@ -23,4 +23,4 @@ def start():
 
 import accelerate
 
-accelerate.notebook_launcher(start, (), num_processes=2, mixed_precision='fp16')
+accelerate.notebook_launcher(start, (), num_processes=3, mixed_precision='fp16')
