@@ -18,26 +18,37 @@ if False:
 import os
 from datasets import load_dataset, concatenate_datasets, load_from_disk
 
+cache_dir = './hugging_hub_cache'
+cpu_count = os.cpu_count()
+
 
 def preprocess_function(data):
     keys = data.formatter.features.keys()
     data = [
-        ''.join(f"<{key}>{data[key][i]}</{key}>" for key in keys)
+        ''.join(f"{key}\n{data[key][i]}\nend\n" for key in keys)
         for i in range(len(list(data.values())[0]))
     ]
     return {'text': data}
 
 
 def compile_dataset(keep_in_memory=False):
-    cache_dir = './hugging_hub_cache'
-    cpu_count = os.cpu_count()
     load_dataset_config = {
         'cache_dir': cache_dir,
         'keep_in_memory': keep_in_memory,
         'num_proc': cpu_count,
     }
-
     # load dataset
+    # red_1t = load_dataset(
+    #     "togethercomputer/RedPajama-Data-1T",
+    #     "default",
+    #     **load_dataset_config,
+    # )
+    red_sample = load_dataset(
+        'togethercomputer/RedPajama-Data-1T-Sample',
+        split="train",
+        **load_dataset_config,
+    )
+
     wikipedia_cn = load_dataset(
         'pleisto/wikipedia-cn-20230720-filtered',
         split="train",
@@ -49,6 +60,7 @@ def compile_dataset(keep_in_memory=False):
         keep_in_memory=keep_in_memory,
         remove_columns=['source'],
     )
+
     wikipedia_simple = load_dataset(
         'wikipedia', '20220301.simple',
         beam_runner='DirectRunner',
@@ -93,7 +105,11 @@ def compile_dataset(keep_in_memory=False):
     )
 
     dataset_config = [
+        # red_1t,
+        red_sample,
         wikipedia_cn,
+        wikipedia_simple,
+        wikipedia_en,
         load_dataset(
             'fka/awesome-chatgpt-prompts',
             split="train",
@@ -104,8 +120,6 @@ def compile_dataset(keep_in_memory=False):
             split="train",
             **load_dataset_config,
         ),
-        wikipedia_simple,
-        wikipedia_en,
         hc3_cn_gpt,
         hc3_cn_human,
     ]
@@ -126,26 +140,13 @@ def compile_dataset(keep_in_memory=False):
     dataset = dataset.shuffle(1024 * 1024 * 16)
     print('dataset[0]', dataset[0])
 
-    # split dataset for train and test
-    dataset = dataset.train_test_split(test_size=0.1)
     # write to file
-    dataset['train'].save_to_disk('./dataset/train')
-    dataset['test'].save_to_disk('./dataset/test')
+    dataset.save_to_disk('./dataset/base')
 
 
-def get_train_dataset(keep_in_memory=False):
-    # load from file
-    dataset = load_from_disk('./dataset/train', keep_in_memory=keep_in_memory)
-    return dataset
-
-
-def get_test_dataset(keep_in_memory=False):
-    # load from file
-    dataset = load_from_disk('./dataset/test', keep_in_memory=keep_in_memory)
-    return dataset
+def get_base_dataset(keep_in_memory=False):
+    return load_from_disk('./dataset/base', keep_in_memory=keep_in_memory)
 
 
 if __name__ == '__main__':
-    dataset = get_train_dataset()
-    print('dataset[0]', dataset[0])
-    # compile_dataset()
+    compile_dataset()

@@ -17,10 +17,11 @@ if False:
 
 
 def start():
-    from Pandora import train_transformer
-    train_transformer()
-
+    # from Pandora import train_transformer
+    # train_transformer()
+    from SkipGram import train_skip_gram
+    train_skip_gram()
 
 import accelerate
 
-accelerate.notebook_launcher(start, (), num_processes=3, mixed_precision='fp16')
+accelerate.notebook_launcher(start, (), num_processes=1, mixed_precision='fp16')

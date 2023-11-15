@@ -11,13 +11,12 @@
 
 """
 from __future__ import unicode_literals, print_function, division
+from typing import *
+
 import math
-
-if False:
-    from typing import *
-
 import os
 
+import tokenizers
 import torch
 import torch.nn as nn
 
@@ -26,12 +25,10 @@ import tqdm
 import accelerate
 from accelerate.local_sgd import LocalSGD
 
-import matplotlib.pyplot as plt
-
-from data_admin import get_train_dataset
+from post_processe import get_train_dataset
 from SkipGram import get_tokenizer, get_embedding
-
-from utils import add_random_value_by_weights
+import config
+from utils import add_random_value_by_weights, WarmupScheduler, save_loss_list_graph
 from aidevkit.component import GradientLayer
 
 
@@ -60,9 +57,17 @@ class GPTBlock(nn.Module):
         super(GPTBlock, self).__init__()
         self.self_attention = nn.MultiheadAttention(feature_dim, num_heads)
         self.feed_forward = nn.Sequential(
-            nn.Linear(feature_dim, feedforward_dim),
+            nn.Linear(feature_dim, feature_dim),
             nn.ReLU(),
-            nn.Linear(feedforward_dim, feature_dim)
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, feature_dim)
         )
         self.layer_norm1 = nn.LayerNorm(feature_dim)
         self.layer_norm2 = nn.LayerNorm(feature_dim)
@@ -185,12 +190,7 @@ def get_mean_token_size():
 def new_model(tokenizer):
     return MMModel(
         tokenizer.get_vocab_size(),
-        embed_size=768,
-        num_layers=32,
-        heads=12,
-        dropout=0.1,
-        res_net_block_num=196,
-        res_net_block_layer_num=6,
+        **config.module
     )
 
 
@@ -208,35 +208,6 @@ class TrainCtx:
     def load_state_dict(self, state_dict):
         self.step = state_dict['global_step']
         self.loss_list = state_dict['loss_list']
-
-
-def print_loss_list_graph(loss_list):
-    x = range(len(loss_list))
-    y = loss_list
-
-    plt.plot(x, y)
-
-    # 设置标题和轴标签
-    plt.title("Loss curve")
-    plt.xlabel("step")
-    plt.ylabel("loss")
-
-    plt.show()
-
-
-def save_loss_list_graph(loss_list, path):
-    x = range(len(loss_list))
-    y = loss_list
-
-    plt.plot(x, y)
-
-    # 设置标题和轴标签
-    plt.title("Loss curve")
-    plt.xlabel("step")
-    plt.ylabel("loss")
-
-    plt.savefig(path)
-
 
 
 def generate_mask(seq_len, device):
@@ -257,21 +228,34 @@ def generate_mask(seq_len, device):
     """
     return nn.Transformer.generate_square_subsequent_mask(seq_len, device)
 
-def train_transformer():
-    gradient_accumulation_steps = 32
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=gradient_accumulation_steps)
+
+def init_all_object(root='./data/transformer') -> Tuple[
+    accelerate.Accelerator,
+    tokenizers.Tokenizer,
+    MMModel,
+    TrainCtx,
+    torch.optim.Optimizer,
+    WarmupScheduler,
+    nn.CrossEntropyLoss,
+    torch.utils.data.DataLoader,
+]:
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
 
     tokenizer = get_tokenizer()
     dataset = get_train_dataset(keep_in_memory=True)
 
     transformer = new_model(tokenizer)
-    initial_lr = 0.000001
-    target_lr = 0.00005
-    warm_up_steps = 1024 * 8
     train_ctx = TrainCtx()
 
-    optimizer = torch.optim.Adam(transformer.parameters(), lr=initial_lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=gradient_accumulation_steps * 10, gamma=0.9)
+    optimizer = torch.optim.Adam(transformer.parameters(),
+                                 lr=config.train['init_lr'],
+                                 )
+    scheduler = WarmupScheduler(optimizer,
+                                config.train['warmup_epochs'] / config.train['gradient_accumulation_steps'],
+                                init_lr=config.train['init_lr'],
+                                max_lr=config.train['max_lr'],
+                                gamma=config.train['gamma'],
+                                )
     loss_function = nn.CrossEntropyLoss(ignore_index=3)
 
     data_loader = torch.utils.data.DataLoader(
@@ -279,6 +263,7 @@ def train_transformer():
         batch_size=1,
         shuffle=True,
         pin_memory=True,
+        collate_fn=lambda x: [i['ids'] for i in x],
     )
 
     data_loader, transformer, optimizer, scheduler, loss_function = accelerator.prepare(
@@ -286,9 +271,9 @@ def train_transformer():
     )
     accelerator.register_for_checkpointing(train_ctx)
 
-    if os.path.isdir("./data/transformer"):
+    if os.path.isdir(root):
         accelerator.print("load transformer")
-        accelerator.load_state("./data/transformer")
+        accelerator.load_state(root)
 
     # print model info
     accelerator.print(
@@ -299,6 +284,11 @@ def train_transformer():
         f"loss_function: {loss_function}",
         sep='\n'
     )
+    return accelerator, tokenizer, transformer, train_ctx, optimizer, scheduler, loss_function, data_loader
+
+
+def train_transformer():
+    accelerator, tokenizer, transformer, train_ctx, optimizer, scheduler, loss_function, data_loader = init_all_object()
 
     # prepare training
     transformer.train()
@@ -320,15 +310,16 @@ def train_transformer():
 
     with LocalSGD(accelerator=accelerator,
                   model=transformer,
-                  local_sgd_steps=gradient_accumulation_steps * 16,
+                  local_sgd_steps=config.train["gradient_accumulation_steps"] * 16,
                   enabled=True) as local_sgd:
-        for text_data in tqdm.tqdm(data_loader, disable=not accelerator.is_local_main_process):
+        for ids_data in tqdm.tqdm(data_loader, disable=not accelerator.is_local_main_process):
             train_ctx.step += 1
             with accelerator.accumulate(transformer):
                 # process data
                 with torch.no_grad():
-                    split_data = tokenizer.encode_batch(text_data['text'])
-                    label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
+                    # split_data = tokenizer.encode_batch(text_data['text'])
+                    # label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
+                    label = torch.tensor(ids_data).to(accelerator.device)
                     data = embedding(label[:, :-1])
                     data = position_encoding(data)
                     data = data + torch.randn_like(data) * 0.1
@@ -346,39 +337,27 @@ def train_transformer():
                 accelerator.backward(loss)
                 optimizer.step()
                 optimizer.zero_grad()
-
-                if train_ctx.step < warm_up_steps:
-                    lr = initial_lr + (target_lr - initial_lr) * (train_ctx.step / warm_up_steps)
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = lr
-                else:
-                    # 执行 StepLR 调度
-                    scheduler.step()
+                scheduler.step()
                 local_sgd.step()
-                if (train_ctx.step + 1) % 1200 == 0:
+                if train_ctx.step > config.train['warmup_epochs'] and (train_ctx.step + 1) % config.train[
+                    'random_epoch'] == 0:
                     with torch.no_grad():
                         # add random to model
-                        if train_ctx.step < 10000:
-                            add_random_value_by_weights(transformer, 0.001)
-                        elif train_ctx.step < 20000:
-                            add_random_value_by_weights(transformer, 0.0005)
-                        elif train_ctx.step < 40000:
-                            add_random_value_by_weights(transformer, 0.00025)
-                        elif train_ctx.step < 80000:
-                            add_random_value_by_weights(transformer, 0.000125)
+                        add_random_value_by_weights(transformer, config.train['random_effect'] * (
+                                config.train['warmup_epochs'] / train_ctx.step))
                 if not accelerator.is_main_process:
                     continue
                 # in main process
                 if (train_ctx.step + 1) % 20000 == 0:
                     accelerator.print(f"\nstep: {train_ctx.step}, loss: {loss.item()}")
                     # save skip_gram
-                    tqdm.tqdm.write(f"save transformer: step: {train_ctx.step}")
+                    accelerator.print(f"save transformer: step: {train_ctx.step}")
                     accelerator.save_state("./data/transformer")
                     save_loss_list_graph(train_ctx.loss_list, f"./data/transformer.png")
                     accelerator.save_state(f"./data/transformer_{train_ctx.step}_{loss.item():.2f}")
 
                     # print original text
-                    accelerator.print('original text:', text_data['text'][0][:100])
+                    accelerator.print('original text:', tokenizer.decode_batch(ids_data)[0][:100])
                     # get result, get max index
                     result = torch.argmax(output, dim=-1)
                     accelerator.print('result ids:', result[:, 0][:100])
@@ -390,51 +369,23 @@ def train_transformer():
                     accelerator.print('result text:', text_result[0])
 
 
-def check_transformer(root='./data/transformer'):
-    gradient_accumulation_steps = 32
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=gradient_accumulation_steps)
-
-    tokenizer = get_tokenizer()
-    dataset = get_train_dataset(keep_in_memory=True)
-
-    transformer = new_model(tokenizer)
-    initial_lr = 0.000001
-    target_lr = 0.00005
-    warm_up_steps = 1024 * 8
-    train_ctx = TrainCtx()
-
-    optimizer = torch.optim.Adam(transformer.parameters(), lr=initial_lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=gradient_accumulation_steps * 10, gamma=0.9)
-    loss_function = nn.CrossEntropyLoss(ignore_index=3)
-
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=1,
-        shuffle=True,
-        pin_memory=True,
-    )
-
-    data_loader, transformer, optimizer, scheduler, loss_function = accelerator.prepare(
-        data_loader, transformer, optimizer, scheduler, loss_function
-    )
-    accelerator.register_for_checkpointing(train_ctx)
-
-    if os.path.isdir(root):
-        accelerator.print("load transformer")
-        accelerator.load_state(root)
-
-    # print model info
-    accelerator.print(
-        f"model structure: {transformer}",
-        f"model parameters: {sum(p.numel() for p in transformer.parameters())}",
-        sep='\n'
-    )
+def check_transformer(input_str, root='./data/transformer'):
+    (
+        accelerator,
+        tokenizer,
+        transformer,
+        train_ctx,
+        optimizer,
+        scheduler,
+        loss_function,
+        data_loader
+    ) = init_all_object(root)
 
     # prepare training
     transformer.eval()
 
     #
-    max_seq_len = 642
+    max_seq_len = 698
     # #  启用填充，最大长度为1024， 对于长度不足1024的序列，用3填充。 对于长度超过1024的序列，进行截断
     # tokenizer.enable_padding(length=max_seq_len, pad_id=3, pad_token="[PAD]")
     #  启用截断，最大长度为1024
@@ -448,8 +399,7 @@ def check_transformer(root='./data/transformer'):
 
     text_data = {
         'text': [
-            # '<question>机票打折是怎么算</question><chatgpt_answers>',
-            '<title>Kopylovo, Vologodsky District, Vologda Oblast</title><text>Kopylovo () is a'
+            input_str,
         ],
     }
 
@@ -487,7 +437,16 @@ def check_transformer(root='./data/transformer'):
 
             # output text
             print('output text:', tokenizer.decode_batch(label.tolist())[0])
+            if tokenizer.decode_batch(label.tolist())[0].rfind('</ text >') != -1:
+                break
+
 
 if __name__ == '__main__':
-    # check_transformer('/root/autodl-tmp/project/data/transformer')
-    train_transformer()
+    # check_transformer('/root/autodl-tmp/project/data_v1/transformer')
+    #     check_transformer('''title:
+    # Kopylovo, Vologodsky District, Vologda Oblast
+    # text:
+    # Kopylovo () is a''')
+    check_transformer('''question: what is your name?
+answer:''')
+    # train_transformer()
