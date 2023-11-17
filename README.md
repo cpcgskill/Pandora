@@ -3,30 +3,12 @@
 
 ## 目录
 
-- [项目结构](#项目结构)
-  - [SkipGram.py](#skipgrampy)
-  - [CBOW.py](#cbowpy)
-  - [Pandora.py](#pandorapy)
-  - [data_admin.py](#data_adminpy)
+- [Embedding-loss图](#Embedding-loss图)
 - [版权说明](#版权说明)
 
-# 项目结构
+## Embedding-loss图
 
-## SkipGram.py
-
-word2vec的SkipGram模型的实现。
-
-## CBOW.py
-
-word2vec的CBOW模型的实现。（ps：没有使用它）
-
-## Pandora.py
-
-Pandora模型的本体，包含了Pandora的训练、测试。
-
-## data_admin.py
-
-数据处理的工具类，包含了数据的读取、处理、保存。
+![Embedding](./skip_gram.png)
 
 ## 版权说明
 

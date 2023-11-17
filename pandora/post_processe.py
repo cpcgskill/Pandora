@@ -13,10 +13,10 @@
 from __future__ import unicode_literals, print_function, division
 
 if False:
-    from typing import *
+    pass
 
 import os
-from datasets import load_dataset, concatenate_datasets, load_from_disk
+from datasets import load_from_disk
 import SkipGram
 
 cache_dir = './hugging_hub_cache'
@@ -29,8 +29,7 @@ def pretokenize_function(data):
     return {'ids': [i.ids for i in tokenizer.encode_batch(data['text'])]}
 
 
-def pretokenize_dataset(keep_in_memory=False):
-    dataset = load_from_disk('./dataset/base')
+def pretokenize_dataset(dataset, keep_in_memory=False):
     dataset = dataset.map(
         pretokenize_function,
         batched=True,
@@ -38,7 +37,6 @@ def pretokenize_dataset(keep_in_memory=False):
         keep_in_memory=keep_in_memory,
         remove_columns=dataset.column_names,
     )
-    dataset.save_to_disk('./dataset/pretokenize')
     return dataset
 
 
@@ -67,18 +65,16 @@ def split_dataset(dataset, keep_in_memory=False):
     return dataset['train'], dataset['test']
 
 
-def process_dataset(keep_in_memory=False):
-    # load from file
-    dataset = load_from_disk('./dataset/pretokenize')
-
+def generate_train_and_test_dataset(keep_in_memory=False):
+    dataset = load_from_disk('./dataset/base')
+    dataset = pretokenize_dataset(dataset)
     dataset = segmentation_dataset(dataset)
-    train_dataset, test_dataset = split_dataset(dataset)
-
+    train_dataset, test_dataset = split_dataset(dataset, keep_in_memory=keep_in_memory)
     # write to file
     train_dataset.save_to_disk('./dataset/train')
     test_dataset.save_to_disk('./dataset/test')
-
-    return train_dataset, test_dataset
+    print('train_dataset[0]', train_dataset[0])
+    print('test_dataset[0]', test_dataset[0])
 
 
 def get_train_dataset(keep_in_memory=False):
@@ -94,6 +90,4 @@ def get_test_dataset(keep_in_memory=False):
 
 
 if __name__ == '__main__':
-    train_dataset, test_dataset = process_dataset()
-    print('train_dataset[0]', train_dataset[0])
-    print('test_dataset[0]', test_dataset[0])
+    generate_train_and_test_dataset()

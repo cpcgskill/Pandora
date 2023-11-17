@@ -25,10 +25,10 @@ import tqdm
 import accelerate
 from accelerate.local_sgd import LocalSGD
 
-from post_processe import get_train_dataset
-from SkipGram import get_tokenizer, get_embedding
-import config
-from utils import add_random_value_by_weights, WarmupScheduler, save_loss_list_graph
+from pandora.post_processe import get_train_dataset
+from pandora.SkipGram import get_tokenizer, get_embedding
+from pandora import config
+from pandora.utils import add_random_value_by_weights, WarmupScheduler, save_loss_list_graph
 from aidevkit.component import GradientLayer
 
 
@@ -447,6 +447,6 @@ if __name__ == '__main__':
     # Kopylovo, Vologodsky District, Vologda Oblast
     # text:
     # Kopylovo () is a''')
-    check_transformer('''question: what is your name?
-answer:''')
-    # train_transformer()
+#     check_transformer('''question: what is your name?
+# answer:''')
+    train_transformer()

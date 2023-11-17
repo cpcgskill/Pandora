@@ -12,7 +12,7 @@
 """
 from __future__ import unicode_literals, print_function, division
 
-tokenizer_path = 'tokenizer2.json'
+tokenizer_path = '../tokenizer.json'
 module = {
     "embed_size": 768,
     "num_layers": 64,

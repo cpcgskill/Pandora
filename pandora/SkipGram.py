@@ -14,76 +14,17 @@ from __future__ import unicode_literals, print_function, division
 
 import os
 
-if False:
-    from typing import *
-
 import torch
 import torch.nn as nn
 import tqdm
 
 import accelerate
-
-from tokenizers import Tokenizer
-from tokenizers import normalizers
-from tokenizers.trainers import WordPieceTrainer
-from tokenizers.models import WordPiece
-from tokenizers.normalizers import NFD, Lowercase, StripAccents
-from tokenizers.pre_tokenizers import Whitespace
-from tokenizers.processors import TemplateProcessing
-from tokenizers import decoders
-
 from accelerate.local_sgd import LocalSGD
 
-import config
-from compile_dataset import get_base_dataset
+from pandora import config
+from pandora.compile_dataset import get_base_dataset
 from utils import WarmupScheduler, save_loss_list_graph
-
-
-def make_tokenizer():
-    tokenizer = Tokenizer(WordPiece(unk_token="[UNK]"))
-    tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
-    tokenizer.pre_tokenizer = Whitespace()
-    tokenizer.post_processor = TemplateProcessing(
-        single="[CLS] $A [SEP]",
-        pair="[CLS] $A [SEP] $B:1 [SEP]:1",
-        special_tokens=[
-            ("[CLS]", 1),
-            ("[SEP]", 2),
-        ],
-    )
-    tokenizer.decoder = decoders.WordPiece()
-    return tokenizer
-
-
-def train_tokenizer():
-    tokenizer = make_tokenizer()
-    trainer = WordPieceTrainer(
-        vocab_size=30522 * 5,
-        special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"],
-    )
-
-    dataset = get_base_dataset()
-
-    tokenizer.train_from_iterator(
-        iterator=(dataset[i: i + 1000]["text"] for i in range(0, len(dataset), 1000)),
-        trainer=trainer,
-        length=len(dataset),
-    )
-    tokenizer.save(config.tokenizer_path)
-
-    test_tokenizer()
-
-
-def test_tokenizer():
-    tokenizer = Tokenizer.from_file(config.tokenizer_path)
-    # tokenizer.model = WordPiece.from_file(config.tokenizer_path)
-    print(tokenizer.encode("Hello, y'all! How are you 😁 ?").tokens)
-    print(tokenizer.encode("你好， 你还好吗？").tokens)
-
-
-def get_tokenizer() -> Tokenizer:
-    tokenizer = Tokenizer.from_file(config.tokenizer_path)
-    return tokenizer
+from tokenizer_ import get_tokenizer
 
 
 # 定义SkipGram模型
@@ -133,9 +74,6 @@ def train_skip_gram():
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
 
-    # check tokenizer
-    print("check tokenizer")
-    test_tokenizer()
     # make embedding
     tokenizer = get_tokenizer()
     skip_gram = make_skip_gram(tokenizer)
@@ -217,20 +155,40 @@ def test_skip_gram():
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
 
-    # check tokenizer
-    print("check tokenizer")
-    test_tokenizer()
-    # make skip_gram
+    # make embedding
     tokenizer = get_tokenizer()
     skip_gram = make_skip_gram(tokenizer)
-    skip_gram = accelerator.prepare(skip_gram)
-    # load skip_gram
-    if os.path.isdir("/root/autodl-fs/skip_gram"):
-        accelerator.load_state("/root/autodl-fs/skip_gram")
+    # train embedding
+    dataset = get_base_dataset(keep_in_memory=True)
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=2048,
+        shuffle=True,
+        pin_memory=True,
+    )
+    optimizer = torch.optim.Adagrad(skip_gram.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+    scheduler = WarmupScheduler(optimizer,
+                                warmup_epochs=10,
+                                init_lr=1.0 / config.module['embed_size'] / 10,
+                                max_lr=1.0 / config.module['embed_size'],
+                                gamma=0.97
+                                )
+    loss_function = nn.CrossEntropyLoss()
+    train_ctx = TrainCtx()
+
+    data_loader, skip_gram, optimizer, scheduler, loss_function, train_ctx = accelerator.prepare(
+        data_loader, skip_gram, optimizer, scheduler, loss_function, train_ctx
+    )
+    accelerator.register_for_checkpointing(train_ctx)
+
+    if os.path.isdir('./data/skip_gram'):
+        accelerator.print("load skip_gram")
+        accelerator.load_state('./data/skip_gram')
     # test skip_gram
     print("test skip_gram")
     skip_gram.eval()
-    text = "Hello Hi Bad 你好"
+    text = "Hello Hi Bad 你好 嗨 How"
     tokens = tokenizer.encode(text)
     print(tokens.tokens)
     print(tokens.ids)
@@ -239,9 +197,8 @@ def test_skip_gram():
     print(output.shape)
     print(output)
     # num dot
-    print(output[0, 1].dot(output[0, 2]))
-    print(output[0, 1].dot(output[0, 3]))
-    print(output[0, 1].dot(output[0, 4]))
+    for i in range(2, output.shape[1]):
+        print(output[0, 1].dot(output[0, i]))
 
 
 def build_embedding_from_skip_gram():
@@ -249,16 +206,36 @@ def build_embedding_from_skip_gram():
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
 
-    # check tokenizer
-    print("check tokenizer")
-    test_tokenizer()
-    # make skip_gram
+    # make embedding
     tokenizer = get_tokenizer()
     skip_gram = make_skip_gram(tokenizer)
-    skip_gram = accelerator.prepare(skip_gram)
-    # load skip_gram
-    if os.path.isdir("/root/autodl-fs/skip_gram"):
-        accelerator.load_state("/root/autodl-fs/skip_gram")
+    # train embedding
+    dataset = get_base_dataset(keep_in_memory=True)
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=2048,
+        shuffle=True,
+        pin_memory=True,
+    )
+    optimizer = torch.optim.Adagrad(skip_gram.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+    scheduler = WarmupScheduler(optimizer,
+                                warmup_epochs=10,
+                                init_lr=1.0 / config.module['embed_size'] / 10,
+                                max_lr=1.0 / config.module['embed_size'],
+                                gamma=0.97
+                                )
+    loss_function = nn.CrossEntropyLoss()
+    train_ctx = TrainCtx()
+
+    data_loader, skip_gram, optimizer, scheduler, loss_function, train_ctx = accelerator.prepare(
+        data_loader, skip_gram, optimizer, scheduler, loss_function, train_ctx
+    )
+    accelerator.register_for_checkpointing(train_ctx)
+
+    if os.path.isdir('./data/skip_gram'):
+        accelerator.print("load skip_gram")
+        accelerator.load_state('./data/skip_gram')
 
     # make embedding
     torch.save(skip_gram.in_embed.state_dict(), "/root/autodl-fs/skip_gram.in_embed.pt")
@@ -296,18 +273,17 @@ def test_embedding():
     print(output.shape)
     print(output)
     # num dot
-    print(output[0, 1].dot(output[0, 2]))
-    print(output[0, 1].dot(output[0, 3]))
-    print(output[0, 1].dot(output[0, 4]))
+    for i in range(2, output.shape[1]):
+        print(output[0, 1].dot(output[0, i]))
 
 
 if __name__ == '__main__':
     # train_tokenizer()
     # build_embedding_from_skip_gram()
     # test_skip_gram()
-    train_skip_gram()
+    # train_skip_gram()
     # accelerator = accelerate.Accelerator()
     # e = get_embedding(accelerator, get_tokenizer())
     # accelerator.save_state("/root/autodl-fs/skip_gram.in_embed")
     #
-    # # test_embedding()
+    test_embedding()

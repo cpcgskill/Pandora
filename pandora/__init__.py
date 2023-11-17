@@ -1,6 +1,6 @@
 # -*-coding:utf-8 -*-
 """
-:创建时间: 2023/9/24 23:10
+:创建时间: 2023/11/18 3:32
 :作者: 苍之幻灵
 :我的主页: https://cpcgskill.com
 :Github: https://github.com/cpcgskill
@@ -13,15 +13,4 @@
 from __future__ import unicode_literals, print_function, division
 
 if False:
-    pass
-
-
-def start():
-    from pandora.kernel import train_transformer
-    train_transformer()
-    # from pandora.SkipGram import train_skip_gram
-    # train_skip_gram()
-
-import accelerate
-
-accelerate.notebook_launcher(start, (), num_processes=1, mixed_precision='fp16')
+    from typing import *
