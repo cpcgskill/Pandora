@@ -17,11 +17,14 @@ if False:
 
 
 def start():
-    from pandora.kernel import train_transformer
-    train_transformer()
-    # from pandora.SkipGram import train_skip_gram
-    # train_skip_gram()
+
+    from pandora.kernel import train_transformer, check_transformer
+    from pandora.data.post_processe import get_train_dataset
+    train_transformer(get_train_dataset(keep_in_memory=True), './data/transformer')
 
 import accelerate
-
-accelerate.notebook_launcher(start, (), num_processes=1, mixed_precision='fp16')
+num_processes=1
+if num_processes > 1:
+    accelerate.notebook_launcher(start, (), num_processes=num_processes, mixed_precision='fp16')
+else:
+    start()

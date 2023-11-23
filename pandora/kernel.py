@@ -25,10 +25,12 @@ import tqdm
 import accelerate
 from accelerate.local_sgd import LocalSGD
 
-from pandora.post_processe import get_train_dataset
-from pandora.SkipGram import get_tokenizer, get_embedding
+from pandora.data.post_processe import get_train_dataset
+from pandora.tokenizer_ import get_tokenizer
+from pandora.CBOW import get_embedding
+# from pandora.SkipGram import get_embedding
 from pandora import config
-from pandora.utils import add_random_value_by_weights, WarmupScheduler, save_loss_list_graph
+from pandora.utils import add_random_value_by_weights, WarmupScheduler, TrainCtx
 from aidevkit.component import GradientLayer
 
 
@@ -194,22 +196,6 @@ def new_model(tokenizer):
     )
 
 
-class TrainCtx:
-    def __init__(self):
-        self.step = 0
-        self.loss_list = []
-
-    def state_dict(self):
-        return {
-            'global_step': self.step,
-            'loss_list': self.loss_list,
-        }
-
-    def load_state_dict(self, state_dict):
-        self.step = state_dict['global_step']
-        self.loss_list = state_dict['loss_list']
-
-
 def generate_mask(seq_len, device):
     """
     mask:
@@ -266,10 +252,14 @@ def init_all_object(root='./data/transformer') -> Tuple[
         collate_fn=lambda x: [i['ids'] for i in x],
     )
 
-    data_loader, transformer, optimizer, scheduler, loss_function = accelerator.prepare(
-        data_loader, transformer, optimizer, scheduler, loss_function
+    transformer, optimizer, scheduler, loss_function = accelerator.prepare(
+        transformer, optimizer, scheduler, loss_function
     )
+
+    train_ctx = accelerator.prepare(train_ctx)
     accelerator.register_for_checkpointing(train_ctx)
+
+    data_loader = accelerator.prepare(data_loader)
 
     if os.path.isdir(root):
         accelerator.print("load transformer")
@@ -287,9 +277,55 @@ def init_all_object(root='./data/transformer') -> Tuple[
     return accelerator, tokenizer, transformer, train_ctx, optimizer, scheduler, loss_function, data_loader
 
 
-def train_transformer():
-    accelerator, tokenizer, transformer, train_ctx, optimizer, scheduler, loss_function, data_loader = init_all_object()
+def train_transformer(dataset, train_dir):
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
 
+    tokenizer = get_tokenizer()
+
+    transformer = new_model(tokenizer)
+    train_ctx = TrainCtx()
+
+    optimizer = torch.optim.Adam(transformer.parameters(),
+                                 lr=config.train['init_lr'],
+                                 )
+    scheduler = WarmupScheduler(optimizer,
+                                config.train['warmup_epochs'] / config.train['gradient_accumulation_steps'],
+                                init_lr=config.train['init_lr'],
+                                max_lr=config.train['max_lr'],
+                                gamma=config.train['gamma'],
+                                )
+    loss_function = nn.CrossEntropyLoss(ignore_index=3)
+
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=True,
+        pin_memory=True,
+        collate_fn=lambda x: [i['ids'] for i in x],
+    )
+
+    transformer, optimizer, scheduler, loss_function = accelerator.prepare(
+        transformer, optimizer, scheduler, loss_function
+    )
+
+    train_ctx = accelerator.prepare(train_ctx)
+    accelerator.register_for_checkpointing(train_ctx)
+
+    data_loader = accelerator.prepare(data_loader)
+
+    if os.path.isdir(os.path.join(train_dir, 'model')):
+        accelerator.print("load model")
+        accelerator.load_state(os.path.join(train_dir, 'model'))
+
+    # print model info
+    accelerator.print(
+        f"model structure: {transformer}",
+        f"model parameters: {sum(p.numel() for p in transformer.parameters())}",
+        f"optimizer: {optimizer}",
+        f"scheduler: {scheduler}",
+        f"loss_function: {loss_function}",
+        sep='\n'
+    )
     # prepare training
     transformer.train()
     # transformer.compute()
@@ -299,14 +335,14 @@ def train_transformer():
     # tokenizer.enable_padding(length=max_seq_len, pad_id=3, pad_token="[PAD]")
 
     # 使用数据集的平均长度作为最大长度， 这个长度可以通过 get_mean_token_size() 函数获取
-    max_seq_len = 698
+    max_seq_len = 512
     #  启用截断
     tokenizer.enable_truncation(max_length=max_seq_len)
     # make embedding
     embedding = get_embedding(tokenizer).to(accelerator.device)
     embedding.eval()
     # 启用旋转位置编码
-    position_encoding = RotateEmbedding(max_seq_len, 768).to(accelerator.device)
+    position_encoding = RotateEmbedding(max_seq_len, config.module['embed_size']).to(accelerator.device)
 
     with LocalSGD(accelerator=accelerator,
                   model=transformer,
@@ -317,21 +353,23 @@ def train_transformer():
             with accelerator.accumulate(transformer):
                 # process data
                 with torch.no_grad():
-                    # split_data = tokenizer.encode_batch(text_data['text'])
-                    # label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
                     label = torch.tensor(ids_data).to(accelerator.device)
-                    data = embedding(label[:, :-1])
+                    data = embedding(label)
                     data = position_encoding(data)
-                    data = data + torch.randn_like(data) * 0.1
+                    data = data + torch.randn_like(data) * 0.01
 
                     # shape[batch_size, seq_len, embed_size] -> [seq_len, batch_size, embed_size]
                     data = data.permute(1, 0, 2)
-                    label = label[:, 1:].permute(1, 0)
+                    label = label.permute(1, 0)
 
                     mask = generate_mask(data.size(0), accelerator.device)
 
-                output = transformer(data, mask=mask)
-                loss = loss_function(output.view(-1, tokenizer.get_vocab_size()), label.view(-1))
+                for i in range(-config.train['prediction_length'], 0):
+                    sub_data = data[:data.size(0) + i]
+                    sub_mask = mask[:mask.size(0) + i, :mask.size(1) + i]
+                    sub_output = transformer(sub_data, mask=sub_mask)
+                sub_label = label[1:label.size(0) + i + 1]
+                loss = loss_function(sub_output.view(-1, tokenizer.get_vocab_size()), sub_label.view(-1))
                 if accelerator.is_main_process:
                     train_ctx.loss_list.append(loss.item())
                 accelerator.backward(loss)
@@ -339,34 +377,19 @@ def train_transformer():
                 optimizer.zero_grad()
                 scheduler.step()
                 local_sgd.step()
-                if train_ctx.step > config.train['warmup_epochs'] and (train_ctx.step + 1) % config.train[
-                    'random_epoch'] == 0:
-                    with torch.no_grad():
-                        # add random to model
-                        add_random_value_by_weights(transformer, config.train['random_effect'] * (
-                                config.train['warmup_epochs'] / train_ctx.step))
+                # if train_ctx.step > config.train['warmup_epochs'] and (train_ctx.step + 1) % config.train[
+                #     'random_epoch'] == 0:
+                #     with torch.no_grad():
+                #         # add random to model
+                #         add_random_value_by_weights(transformer, config.train['random_effect'] * (
+                #                 config.train['warmup_epochs'] / train_ctx.step))
                 if not accelerator.is_main_process:
                     continue
                 # in main process
-                if (train_ctx.step + 1) % 20000 == 0:
-                    accelerator.print(f"\nstep: {train_ctx.step}, loss: {loss.item()}")
-                    # save skip_gram
-                    accelerator.print(f"save transformer: step: {train_ctx.step}")
-                    accelerator.save_state("./data/transformer")
-                    save_loss_list_graph(train_ctx.loss_list, f"./data/transformer.png")
-                    accelerator.save_state(f"./data/transformer_{train_ctx.step}_{loss.item():.2f}")
-
-                    # print original text
-                    accelerator.print('original text:', tokenizer.decode_batch(ids_data)[0][:100])
-                    # get result, get max index
-                    result = torch.argmax(output, dim=-1)
-                    accelerator.print('result ids:', result[:, 0][:100])
-                    # to text token list
-                    token_result = [tokenizer.id_to_token(i) for i in result[:, 0].tolist()]
-                    accelerator.print('result token list:', token_result[:100])
-                    # to text
-                    text_result = tokenizer.decode_batch(result.permute(1, 0).tolist())
-                    accelerator.print('result text:', text_result[0])
+                if (train_ctx.step + 1) % 20_000 == 0:
+                    accelerator.save_state(os.path.join(train_dir, 'model_backup'))
+                    accelerator.save_state(os.path.join(train_dir, 'model'))
+                    train_ctx.export_loss_data(train_dir)
 
 
 def check_transformer(input_str, root='./data/transformer'):
@@ -397,15 +420,9 @@ def check_transformer(input_str, root='./data/transformer'):
     position_encoding = RotateEmbedding(max_seq_len, 768).to(accelerator.device)
     position_encoding.eval()
 
-    text_data = {
-        'text': [
-            input_str,
-        ],
-    }
-
     # process data
     with torch.no_grad():
-        split_data = tokenizer.encode_batch(text_data['text'])
+        split_data = tokenizer.encode_batch([input_str])
         label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
         label = label[:, :-1]
         for _ in range(500):
@@ -418,22 +435,35 @@ def check_transformer(input_str, root='./data/transformer'):
             mask = generate_mask(data.size(0), accelerator.device)
 
             output = transformer(data, mask=mask)
-            # output = output + torch.randn_like(output) * 0.4
+            output = output.permute(1, 0, 2)
 
             # print original text
-            accelerator.print('original text:', text_data['text'][0][:100])
+            accelerator.print('original text:', input_str[:100])
             # get result, get max index
-            result = torch.argmax(output, dim=-1)
+            # result = torch.argmax(output, dim=-1)
+            ## if now result equal previous, add random
+            # result = torch.argmax(output, dim=-1)
+            # if label[0, -1].equal(result[0, -1]):
+            #     softmaxed_output = torch.softmax(output, dim=-1).reshape(output.shape[0]*output.shape[1], -1)
+            #     result = torch.multinomial(softmaxed_output, num_samples=1).reshape(output.shape[0], output.shape[1])
+
+            top_probs, top_idx = torch.topk(output, k=10, dim=-1)
+            softmaxed_output = torch.softmax(top_probs, dim=-1).reshape(top_probs.shape[0] * top_probs.shape[1], -1)
+
+            result = torch.multinomial(softmaxed_output, num_samples=1).reshape(top_probs.shape[0], top_probs.shape[1])
+            result = top_idx.gather(dim=-1, index=result.reshape(result.shape[0], result.shape[1], 1))
+            result = result.reshape(top_idx.shape[0], top_idx.shape[1])
+
             accelerator.print('result ids:', result[:, 0][:100])
             # to text token list
             token_result = [tokenizer.id_to_token(i) for i in result[:, 0].tolist()]
             accelerator.print('result token list:', token_result[:100])
             # to text
-            text_result = tokenizer.decode_batch(result.permute(1, 0).tolist())
+            text_result = tokenizer.decode_batch(result.tolist())
             accelerator.print('result text:', text_result[0])
 
             # add next token mask
-            label = torch.cat([label, result.permute(1, 0)[:, -1:]], dim=-1)
+            label = torch.cat([label, result[:, -1:]], dim=-1)
 
             # output text
             print('output text:', tokenizer.decode_batch(label.tolist())[0])
@@ -443,10 +473,10 @@ def check_transformer(input_str, root='./data/transformer'):
 
 if __name__ == '__main__':
     # check_transformer('/root/autodl-tmp/project/data_v1/transformer')
-    #     check_transformer('''title:
-    # Kopylovo, Vologodsky District, Vologda Oblast
-    # text:
-    # Kopylovo () is a''')
-#     check_transformer('''question: what is your name?
-# answer:''')
-    train_transformer()
+    check_transformer('''title:
+    Kopylovo, Vologodsky District, Vologda Oblast
+    text:
+    Kopylovo () is a''')
+    check_transformer('''question: what is your name?
+answer:''')
+    # train_transformer()

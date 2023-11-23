@@ -22,33 +22,34 @@ from tokenizers.processors import TemplateProcessing
 from tokenizers import decoders
 
 from pandora import config
-from pandora.compile_dataset import get_base_dataset
-
 
 def make_tokenizer():
     tokenizer = Tokenizer(WordPiece(unk_token="[UNK]"))
     tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer.post_processor = TemplateProcessing(
-        single="[CLS] $A [SEP]",
-        pair="[CLS] $A [SEP] $B:1 [SEP]:1",
+        single="[CLS] $A [EOS]",
+        pair="[CLS] $A [SEP] $B:1 [EOS]",
         special_tokens=[
+            ("[UNK]", 0),
             ("[CLS]", 1),
             ("[SEP]", 2),
+            ("[EOS]", 3),
+            ("[PAD]", 4),
+            ("[MASK]", 5),
         ],
     )
     tokenizer.decoder = decoders.WordPiece()
     return tokenizer
 
 
-def train_tokenizer():
+
+def train_tokenizer(dataset):
     tokenizer = make_tokenizer()
     trainer = WordPieceTrainer(
         vocab_size=30522 * 5,
-        special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"],
+        special_tokens=["[UNK]", "[CLS]", "[SEP]", "[EOS]", "[PAD]", "[MASK]"],
     )
-
-    dataset = get_base_dataset()
 
     tokenizer.train_from_iterator(
         iterator=(dataset[i: i + 1000]["text"] for i in range(0, len(dataset), 1000)),
@@ -70,3 +71,6 @@ def test_tokenizer():
 def get_tokenizer() -> Tokenizer:
     tokenizer = Tokenizer.from_file(config.tokenizer_path)
     return tokenizer
+
+if __name__ == '__main__':
+    test_tokenizer()

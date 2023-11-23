@@ -12,6 +12,9 @@
 """
 from __future__ import unicode_literals, print_function, division
 
+import json
+import os
+
 if False:
     from typing import *
 
@@ -65,7 +68,6 @@ class WarmupScheduler(LRScheduler):
         return [self.now_lr for _ in self.base_lrs]
 
 
-
 def print_loss_list_graph(loss_list):
     x = range(len(loss_list))
     y = loss_list
@@ -92,3 +94,27 @@ def save_loss_list_graph(loss_list, path):
     plt.ylabel("loss")
 
     plt.savefig(path)
+
+
+class TrainCtx:
+    def __init__(self):
+        self.step = 0
+        self.loss_list = []
+
+    def state_dict(self):
+        return {
+            'global_step': self.step,
+            'loss_list': self.loss_list,
+        }
+
+    def load_state_dict(self, state_dict):
+        self.step = state_dict['global_step']
+        self.loss_list = state_dict['loss_list']
+
+    def save_loss_list_graph(self, path):
+        save_loss_list_graph(self.loss_list, path)
+
+    def export_loss_data(self, export_path):
+        self.save_loss_list_graph(os.path.join(export_path, 'loss.png'))
+        with open(os.path.join(export_path, 'loss.json'), 'wb') as f:
+            f.write(json.dumps(self.loss_list).encode('utf-8'))

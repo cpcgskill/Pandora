@@ -16,13 +16,14 @@ if False:
     pass
 
 import os
-from datasets import load_from_disk
-import SkipGram
+import functools
+
+from datasets import load_from_disk, concatenate_datasets
+import pandora.tokenizer_ as tokenizer_
 
 cache_dir = './hugging_hub_cache'
 cpu_count = os.cpu_count()
-tokenizer = SkipGram.get_tokenizer()
-chunk_size = 698
+tokenizer = tokenizer_.get_tokenizer()
 
 
 def pretokenize_function(data):
@@ -40,17 +41,17 @@ def pretokenize_dataset(dataset, keep_in_memory=False):
     return dataset
 
 
-def _segmentation_function(data):
+def _segmentation_function(data, chunk_size = 512):
     output = []
     for i in data['ids']:
         output.extend(i[j:j + chunk_size] for j in range(0, len(i), chunk_size))
     return {'ids': output}
 
 
-def segmentation_dataset(dataset, keep_in_memory=False):
+def segmentation_dataset(dataset, chunk_size = 512, keep_in_memory=False):
     # segmentation
     dataset = dataset.map(
-        _segmentation_function,
+        functools.partial(_segmentation_function, chunk_size=chunk_size),
         batched=True,
         num_proc=cpu_count,
         keep_in_memory=keep_in_memory,
@@ -64,11 +65,15 @@ def split_dataset(dataset, keep_in_memory=False):
     dataset = dataset.train_test_split(test_size=0.1, keep_in_memory=keep_in_memory)
     return dataset['train'], dataset['test']
 
-
-def generate_train_and_test_dataset(keep_in_memory=False):
-    dataset = load_from_disk('./dataset/base')
+def generate_pretokenize_dataset(keep_in_memory=False):
+    dataset = load_from_disk('./dataset/main')
     dataset = pretokenize_dataset(dataset)
-    dataset = segmentation_dataset(dataset)
+    dataset.save_to_disk('./dataset/main_pretokenize')
+
+
+def generate_train_and_test_dataset(keep_in_memory=False, chunk_size = 512):
+    dataset = load_from_disk('./dataset/main_pretokenize')
+    dataset = segmentation_dataset(dataset, chunk_size=chunk_size)
     train_dataset, test_dataset = split_dataset(dataset, keep_in_memory=keep_in_memory)
     # write to file
     train_dataset.save_to_disk('./dataset/train')
@@ -88,6 +93,38 @@ def get_test_dataset(keep_in_memory=False):
     dataset = load_from_disk('./dataset/test', keep_in_memory=keep_in_memory)
     return dataset
 
+def process_embedding_dataset(data):
+    return {'pair': list(zip(data['ids'][:-1], data['ids'][1:]))}
+
+def generate_embedding_dataset(keep_in_memory=False):
+    dataset_list = []
+
+    dataset = load_from_disk('./dataset/base')
+    dataset = pretokenize_dataset(dataset)
+    dataset = dataset.map(
+        process_embedding_dataset,
+        batched=True,
+        num_proc=cpu_count,
+        keep_in_memory=keep_in_memory,
+        remove_columns=dataset.column_names,
+    )
+    dataset_list.append(dataset)
+
+    dataset = load_from_disk('./dataset/textbook_base')
+    dataset = pretokenize_dataset(dataset)
+    dataset = dataset.map(
+        process_embedding_dataset,
+        batched=True,
+        num_proc=cpu_count,
+        keep_in_memory=keep_in_memory,
+        remove_columns=dataset.column_names,
+    )
+    dataset_list.append(dataset)
+    # concatenate
+    dataset = concatenate_datasets(dataset_list)
+    # write to file
+    dataset.save_to_disk('./dataset/embedding')
+    print('dataset[0]', dataset[0])
 
 if __name__ == '__main__':
-    generate_train_and_test_dataset()
+    generate_embedding_dataset()
