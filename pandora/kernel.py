@@ -215,67 +215,6 @@ def generate_mask(seq_len, device):
     return nn.Transformer.generate_square_subsequent_mask(seq_len, device)
 
 
-def init_all_object(root='./data/transformer') -> Tuple[
-    accelerate.Accelerator,
-    tokenizers.Tokenizer,
-    MMModel,
-    TrainCtx,
-    torch.optim.Optimizer,
-    WarmupScheduler,
-    nn.CrossEntropyLoss,
-    torch.utils.data.DataLoader,
-]:
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
-
-    tokenizer = get_tokenizer()
-    dataset = get_train_dataset(keep_in_memory=True)
-
-    transformer = new_model(tokenizer)
-    train_ctx = TrainCtx()
-
-    optimizer = torch.optim.Adam(transformer.parameters(),
-                                 lr=config.train['init_lr'],
-                                 )
-    scheduler = WarmupScheduler(optimizer,
-                                config.train['warmup_epochs'] / config.train['gradient_accumulation_steps'],
-                                init_lr=config.train['init_lr'],
-                                max_lr=config.train['max_lr'],
-                                gamma=config.train['gamma'],
-                                )
-    loss_function = nn.CrossEntropyLoss(ignore_index=3)
-
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=1,
-        shuffle=True,
-        pin_memory=True,
-        collate_fn=lambda x: [i['ids'] for i in x],
-    )
-
-    transformer, optimizer, scheduler, loss_function = accelerator.prepare(
-        transformer, optimizer, scheduler, loss_function
-    )
-
-    train_ctx = accelerator.prepare(train_ctx)
-    accelerator.register_for_checkpointing(train_ctx)
-
-    data_loader = accelerator.prepare(data_loader)
-
-    if os.path.isdir(root):
-        accelerator.print("load transformer")
-        accelerator.load_state(root)
-
-    # print model info
-    accelerator.print(
-        f"model structure: {transformer}",
-        f"model parameters: {sum(p.numel() for p in transformer.parameters())}",
-        f"optimizer: {optimizer}",
-        f"scheduler: {scheduler}",
-        f"loss_function: {loss_function}",
-        sep='\n'
-    )
-    return accelerator, tokenizer, transformer, train_ctx, optimizer, scheduler, loss_function, data_loader
-
 
 def train_transformer(dataset, train_dir):
     accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
@@ -363,8 +302,11 @@ def train_transformer(dataset, train_dir):
                     label = label.permute(1, 0)
 
                     mask = generate_mask(data.size(0), accelerator.device)
-
-                for i in range(-config.train['prediction_length'], 0):
+                if accelerator.is_main_process:
+                    prediction_length = config.train['main_prediction_length']
+                else:
+                    prediction_length = config.train['prediction_length']
+                for i in range(-prediction_length, 0):
                     sub_data = data[:data.size(0) + i]
                     sub_mask = mask[:mask.size(0) + i, :mask.size(1) + i]
                     sub_output = transformer(sub_data, mask=sub_mask)
@@ -386,23 +328,52 @@ def train_transformer(dataset, train_dir):
                 if not accelerator.is_main_process:
                     continue
                 # in main process
-                if (train_ctx.step + 1) % 20_000 == 0:
+                if (train_ctx.step + 1) % 2000 == 0:
                     accelerator.save_state(os.path.join(train_dir, 'model_backup'))
                     accelerator.save_state(os.path.join(train_dir, 'model'))
                     train_ctx.export_loss_data(train_dir)
 
 
-def check_transformer(input_str, root='./data/transformer'):
-    (
-        accelerator,
-        tokenizer,
-        transformer,
-        train_ctx,
-        optimizer,
-        scheduler,
-        loss_function,
-        data_loader
-    ) = init_all_object(root)
+
+def check_transformer(input_str, train_dir='./data/transformer'):
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
+
+    tokenizer = get_tokenizer()
+
+    transformer = new_model(tokenizer)
+    train_ctx = TrainCtx()
+
+    optimizer = torch.optim.Adam(transformer.parameters(),
+                                 lr=config.train['init_lr'],
+                                 )
+    scheduler = WarmupScheduler(optimizer,
+                                config.train['warmup_epochs'] / config.train['gradient_accumulation_steps'],
+                                init_lr=config.train['init_lr'],
+                                max_lr=config.train['max_lr'],
+                                gamma=config.train['gamma'],
+                                )
+    loss_function = nn.CrossEntropyLoss(ignore_index=3)
+
+    transformer, optimizer, scheduler, loss_function = accelerator.prepare(
+        transformer, optimizer, scheduler, loss_function
+    )
+
+    train_ctx = accelerator.prepare(train_ctx)
+    accelerator.register_for_checkpointing(train_ctx)
+
+    if os.path.isdir(os.path.join(train_dir, 'model')):
+        accelerator.print("load model")
+        accelerator.load_state(os.path.join(train_dir, 'model'))
+
+    # print model info
+    accelerator.print(
+        f"model structure: {transformer}",
+        f"model parameters: {sum(p.numel() for p in transformer.parameters())}",
+        f"optimizer: {optimizer}",
+        f"scheduler: {scheduler}",
+        f"loss_function: {loss_function}",
+        sep='\n'
+    )
 
     # prepare training
     transformer.eval()

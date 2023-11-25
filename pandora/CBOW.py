@@ -54,10 +54,6 @@ class CBOW(nn.Module):
         return self
 
 
-def make_embedding(tokenizer):
-    return CBOW(tokenizer.get_vocab_size(), config.module['embed_size']).normal_embedding()
-
-
 def train_embedding(dataset, train_dir):
     # accelerate
     accelerator = accelerate.Accelerator()
@@ -65,7 +61,7 @@ def train_embedding(dataset, train_dir):
 
     # make
     tokenizer = get_tokenizer()
-    model = make_embedding(tokenizer)
+    model = CBOW(tokenizer.get_vocab_size(), config.module['embed_size']).normal_embedding()
     # train
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -114,11 +110,8 @@ def train_embedding(dataset, train_dir):
                 for i in range(2, token_ids.shape[1] - 2):
                     context = torch.stack(
                         [
-                            token_ids[:, i - 2],
                             token_ids[:, i - 1],
-                            token_ids[:, i + 1],
-                            token_ids[:, i + 2],
-                        ],
+                            token_ids[:, i + 1],                        ],
                         dim=1,
                     )
                     target = token_ids[:, i]
@@ -130,8 +123,9 @@ def train_embedding(dataset, train_dir):
                 local_sgd.step()
                 train_ctx.loss_list.append(loss.item())
 
-                if train_ctx.step % 10 == 0:
-                    model.normal_embedding()
+                # if train_ctx.step % 10 == 0:
+                if True:
+                    model.module.normal_embedding()
 
                 if not accelerator.is_main_process:
                     continue
@@ -141,7 +135,7 @@ def train_embedding(dataset, train_dir):
                     accelerator.save_state(os.path.join(train_dir, 'model_backup'))
                     accelerator.save_state(os.path.join(train_dir, 'model'))
                     train_ctx.export_loss_data(train_dir)
-
+            train_ctx.step = 0
     # test embedding
     test_embedding()
 
@@ -153,7 +147,7 @@ def build_embedding(train_dir, output_path):
 
     # make
     tokenizer = get_tokenizer()
-    model = make_embedding(tokenizer)
+    model = CBOW(tokenizer.get_vocab_size(), config.module['embed_size'])
 
     optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
     scheduler = WarmupScheduler(optimizer,

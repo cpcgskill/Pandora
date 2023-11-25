@@ -15,8 +15,8 @@ from __future__ import unicode_literals, print_function, division
 tokenizer_path = './tokenizer.json'
 
 module = {
-    "embed_size": 2048,
-    "num_layers": 32,
+    "embed_size": 768,
+    "num_layers": 64,
     "heads": 8,
     "dropout": 0.1,
     "res_net_block_num": 32,
@@ -33,5 +33,6 @@ train = {
     "max_lr": 0.0000125,
     "gamma": 0.97,
 
-    "prediction_length": 1,
+    "prediction_length": 3,
+    "main_prediction_length": 1,
 }

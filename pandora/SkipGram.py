@@ -120,7 +120,7 @@ def train_skip_gram(dataset, train_dir):
                 train_ctx.loss_list.append(loss.item())
 
                 if train_ctx.step % 10 == 0:
-                    model.normal_embedding()
+                    model.module.normal_embedding()
 
                 if not accelerator.is_main_process:
                     continue

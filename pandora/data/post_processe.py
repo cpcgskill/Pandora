@@ -41,14 +41,14 @@ def pretokenize_dataset(dataset, keep_in_memory=False):
     return dataset
 
 
-def _segmentation_function(data, chunk_size = 512):
+def _segmentation_function(data, chunk_size=512):
     output = []
     for i in data['ids']:
         output.extend(i[j:j + chunk_size] for j in range(0, len(i), chunk_size))
     return {'ids': output}
 
 
-def segmentation_dataset(dataset, chunk_size = 512, keep_in_memory=False):
+def segmentation_dataset(dataset, chunk_size=512, keep_in_memory=False):
     # segmentation
     dataset = dataset.map(
         functools.partial(_segmentation_function, chunk_size=chunk_size),
@@ -65,13 +65,14 @@ def split_dataset(dataset, keep_in_memory=False):
     dataset = dataset.train_test_split(test_size=0.1, keep_in_memory=keep_in_memory)
     return dataset['train'], dataset['test']
 
+
 def generate_pretokenize_dataset(keep_in_memory=False):
     dataset = load_from_disk('./dataset/main')
     dataset = pretokenize_dataset(dataset)
     dataset.save_to_disk('./dataset/main_pretokenize')
 
 
-def generate_train_and_test_dataset(keep_in_memory=False, chunk_size = 512):
+def generate_train_and_test_dataset(keep_in_memory=False, chunk_size=512):
     dataset = load_from_disk('./dataset/main_pretokenize')
     dataset = segmentation_dataset(dataset, chunk_size=chunk_size)
     train_dataset, test_dataset = split_dataset(dataset, keep_in_memory=keep_in_memory)
@@ -80,6 +81,17 @@ def generate_train_and_test_dataset(keep_in_memory=False, chunk_size = 512):
     test_dataset.save_to_disk('./dataset/test')
     print('train_dataset[0]', train_dataset[0])
     print('test_dataset[0]', test_dataset[0])
+
+
+def get_main_dataset(keep_in_memory=False):
+    # load from file
+    dataset = load_from_disk('./dataset/main', keep_in_memory=keep_in_memory)
+    return dataset
+
+def get_pretokenize_dataset(keep_in_memory=False):
+    # load from file
+    dataset = load_from_disk('./dataset/main_pretokenize', keep_in_memory=keep_in_memory)
+    return dataset
 
 
 def get_train_dataset(keep_in_memory=False):
@@ -93,8 +105,10 @@ def get_test_dataset(keep_in_memory=False):
     dataset = load_from_disk('./dataset/test', keep_in_memory=keep_in_memory)
     return dataset
 
+
 def process_embedding_dataset(data):
     return {'pair': list(zip(data['ids'][:-1], data['ids'][1:]))}
+
 
 def generate_embedding_dataset(keep_in_memory=False):
     dataset_list = []
@@ -125,6 +139,7 @@ def generate_embedding_dataset(keep_in_memory=False):
     # write to file
     dataset.save_to_disk('./dataset/embedding')
     print('dataset[0]', dataset[0])
+
 
 if __name__ == '__main__':
     generate_embedding_dataset()
