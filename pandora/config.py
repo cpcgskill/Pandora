@@ -16,18 +16,17 @@ tokenizer_path = './tokenizer.json'
 
 module = {
     "embed_size": 768,
-    "num_layers": 64,
-    "heads": 8,
+    "feedforward_size": 3072,
+    "num_layers": 32,
+    "heads": 12,
     "dropout": 0.1,
-    "res_net_block_num": 32,
+    "res_net_block_num": 64,
     "res_net_block_layer_num": 6
 }
 
 train = {
     "gradient_accumulation_steps": 12,
 
-    "random_effect": 0.0000125,
-    "random_epoch": 1200,
     "warmup_epochs": 10_000,
     "init_lr": 0.00000025,
     "max_lr": 0.0000125,

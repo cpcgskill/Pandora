@@ -65,7 +65,7 @@ def train_skip_gram(dataset, train_dir):
     # train
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=2048,
+        batch_size=256,
         shuffle=True,
         pin_memory=True,
     )
@@ -107,32 +107,34 @@ def train_skip_gram(dataset, train_dir):
                 token_ids = token_ids.to(accelerator.device)
 
                 optimizer.zero_grad()
-                # 向前向后各取2个词，共4个词作为上下文
                 for i in range(token_ids.shape[1] - 1):
                     target_idx = token_ids[:, i]
                     context_idx = token_ids[:, i + 1]
                     output = model(target_idx)
                     loss = loss_function(output, context_idx)
                     accelerator.backward(loss / (token_ids.shape[1] - 1))
+
                 optimizer.step()
                 scheduler.step()
                 local_sgd.step()
                 train_ctx.loss_list.append(loss.item())
 
-                if train_ctx.step % 10 == 0:
-                    model.module.normal_embedding()
+                if train_ctx.step % 100 == 0:
+                    if accelerator.num_processes > 1:
+                        model.module.normal_embedding()
+                    else:
+                        model.normal_embedding()
 
                 if not accelerator.is_main_process:
                     continue
 
-                if train_ctx.step % 30 == 0:
+                if train_ctx.step % 12 == 0:
+                    train_ctx.export_loss_data(train_dir)
+                if train_ctx.step % 120 == 0:
                     # save skip_gram
                     tqdm.tqdm.write(f"save model: {epoch}")
                     accelerator.save_state(os.path.join(train_dir, 'model_backup'))
                     accelerator.save_state(os.path.join(train_dir, 'model'))
-                    train_ctx.export_loss_data(train_dir)
-
-
 
 def test_skip_gram(train_dir):
     # accelerate
@@ -186,23 +188,16 @@ def test_skip_gram(train_dir):
         print(output[0, 1].dot(output[0, i]))
 
 
-def build_embedding_from_skip_gram():
+def build_embedding_from_skip_gram(train_dir):
     # accelerate
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
 
-    # make embedding
+    # make
     tokenizer = get_tokenizer()
-    skip_gram = make_skip_gram(tokenizer)
-    # train embedding
-    dataset = get_base_dataset(keep_in_memory=True)
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=2048,
-        shuffle=True,
-        pin_memory=True,
-    )
-    optimizer = torch.optim.Adagrad(skip_gram.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
+    model = make_skip_gram(tokenizer)
+    # train
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
     scheduler = WarmupScheduler(optimizer,
                                 warmup_epochs=10,
                                 init_lr=1.0 / config.module['embed_size'] / 10,
@@ -212,20 +207,18 @@ def build_embedding_from_skip_gram():
     loss_function = nn.CrossEntropyLoss()
     train_ctx = TrainCtx()
 
-    data_loader, skip_gram, optimizer, scheduler, loss_function, train_ctx = accelerator.prepare(
-        data_loader, skip_gram, optimizer, scheduler, loss_function, train_ctx
-    )
+    model, optimizer, scheduler, loss_function = accelerator.prepare(model, optimizer, scheduler, loss_function)
+
+    train_ctx = accelerator.prepare(train_ctx)
     accelerator.register_for_checkpointing(train_ctx)
 
-    if os.path.isdir('./data/skip_gram'):
-        accelerator.print("load skip_gram")
-        accelerator.load_state('./data/skip_gram')
+    if os.path.isdir(os.path.join(train_dir, 'model')):
+        accelerator.print("load model")
+        accelerator.load_state(os.path.join(train_dir, 'model'))
 
     # make embedding
-    torch.save(skip_gram.in_embed.state_dict(), "/root/autodl-fs/skip_gram.in_embed.pt")
+    torch.save(model.in_embed.state_dict(), "/root/autodl-fs/embedding.pt")
 
-    print('test get embedding')
-    get_embedding(get_tokenizer())
 
 
 def make_embedding(tokenizer):

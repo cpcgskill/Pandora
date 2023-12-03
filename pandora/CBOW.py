@@ -140,7 +140,7 @@ def train_embedding(dataset, train_dir):
     test_embedding()
 
 
-def build_embedding(train_dir, output_path):
+def build_embedding(train_dir):
     # accelerate
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
@@ -169,7 +169,7 @@ def build_embedding(train_dir, output_path):
         accelerator.load_state(os.path.join(train_dir, 'model'))
 
     # make embedding
-    torch.save(model.embed.state_dict(), output_path)
+    torch.save(model.embed.state_dict(), "/root/autodl-fs/embedding.pt")
 
 
 def make_embedding(tokenizer):

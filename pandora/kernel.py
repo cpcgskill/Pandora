@@ -59,17 +59,9 @@ class GPTBlock(nn.Module):
         super(GPTBlock, self).__init__()
         self.self_attention = nn.MultiheadAttention(feature_dim, num_heads)
         self.feed_forward = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
+            nn.Linear(feature_dim, feedforward_dim),
             nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim),
-            nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim),
-            nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim),
-            nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim),
-            nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim)
+            nn.Linear(feedforward_dim, feature_dim)
         )
         self.layer_norm1 = nn.LayerNorm(feature_dim)
         self.layer_norm2 = nn.LayerNorm(feature_dim)
@@ -104,6 +96,7 @@ class MMModel(nn.Module):
     def __init__(self,
                  vocab_size,
                  embed_size,
+                 feedforward_size,
                  num_layers,
                  heads,
                  dropout=0.1,
@@ -111,7 +104,7 @@ class MMModel(nn.Module):
                  res_net_block_layer_num=6,
                  ):
         super(MMModel, self).__init__()
-        self.gpt = GPT(embed_size, heads, embed_size * 4, num_layers)
+        self.gpt = GPT(embed_size, heads, feedforward_size, num_layers)
         self.dropout = nn.Dropout(dropout)
         self.res_net = ResNet(embed_size, res_net_block_num, res_net_block_layer_num, bias=False)
         self.fc_out = nn.Linear(embed_size, vocab_size)
@@ -125,6 +118,7 @@ class MMModel(nn.Module):
         """
         x = self.dropout(x)
         out = self.gpt(x, attn_mask=mask)
+        # out = self.res_net(torch.cat([x, out], dim=-1))
         out = self.res_net(out)
         out = self.fc_out(out)
         return out
@@ -302,7 +296,7 @@ def train_transformer(dataset, train_dir):
                     label = label.permute(1, 0)
 
                     mask = generate_mask(data.size(0), accelerator.device)
-                if accelerator.is_main_process:
+                if accelerator.is_main_process and accelerator.num_processes > 1:
                     prediction_length = config.train['main_prediction_length']
                 else:
                     prediction_length = config.train['prediction_length']
@@ -319,12 +313,7 @@ def train_transformer(dataset, train_dir):
                 optimizer.zero_grad()
                 scheduler.step()
                 local_sgd.step()
-                # if train_ctx.step > config.train['warmup_epochs'] and (train_ctx.step + 1) % config.train[
-                #     'random_epoch'] == 0:
-                #     with torch.no_grad():
-                #         # add random to model
-                #         add_random_value_by_weights(transformer, config.train['random_effect'] * (
-                #                 config.train['warmup_epochs'] / train_ctx.step))
+
                 if not accelerator.is_main_process:
                     continue
                 # in main process
@@ -438,7 +427,7 @@ def check_transformer(input_str, train_dir='./data/transformer'):
 
             # output text
             print('output text:', tokenizer.decode_batch(label.tolist())[0])
-            if tokenizer.decode_batch(label.tolist())[0].rfind('</ text >') != -1:
+            if tokenizer.decode_batch(label.tolist())[0].rfind('[EOS]') != -1:
                 break
 
 
