@@ -12,6 +12,8 @@
 """
 from __future__ import unicode_literals, print_function, division
 
+import datasets
+
 if False:
     from typing import *
 
@@ -204,6 +206,8 @@ def download_textbook_dataset(keep_in_memory=False):
     return concatenate_datasets(dataset_list)
 
 
+
+
 def generate_main_dataset(keep_in_memory=False):
     en_dataset = download_base_dataset(keep_in_memory=keep_in_memory)
     cn_dataset = download_cn_dataset(keep_in_memory=keep_in_memory)
@@ -231,6 +235,12 @@ def get_main_dataset(keep_in_memory=False):
 def get_textbook_dataset(keep_in_memory=False):
     return load_from_disk('./dataset/textbook', keep_in_memory=keep_in_memory)
 
+def get_custom_answer_dataset():
+    # load dataset
+    with open('./custom_data/answer.jsonl', 'r', encoding='utf-8') as f:
+        data_list = [{'text': i} for i in f.read().splitlines() if i.strip() != '']
+    dataset = datasets.Dataset.from_list(data_list)
+    return dataset
 
 if __name__ == '__main__':
     generate_full_dataset()

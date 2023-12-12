@@ -54,20 +54,77 @@ class ResNet(nn.Module):
         return x
 
 
+class SelfAttention(nn.Module):
+    """一个单头的自注意力层"""
+
+    def __init__(self, embed_size, dopout=0.1):
+        super(SelfAttention, self).__init__()
+        self.embed_size = embed_size
+        self.dopout = dopout
+
+        self.q = nn.Linear(embed_size, embed_size, bias=False)
+        self.k = nn.Linear(embed_size, embed_size, bias=False)
+        self.v = nn.Linear(embed_size, embed_size, bias=False)
+    def forward(self, x, attn_mask=None):
+        """
+        :param x: [seq_len, batch_size, embed_size]
+        :param attn_mask: [seq_len, seq_len]
+        :return:
+        """
+        q = self.q(x)
+        k = self.k(x)
+        v = self.v(x)
+
+        # [seq_len, batch_size, embed_size] * [seq_len, batch_size, embed_size] -> [seq_len, batch_size, seq_len]
+        attn = nn.functional.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=self.dopout if self.training else 0.0,
+        )
+        return attn
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, embed_size, heads, dropout=0.1):
+        super(MultiHeadAttention, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+
+        self.self_attention_list = nn.ModuleList([
+            SelfAttention(embed_size, dropout) for _ in range(heads)
+        ])
+
+        self.fc = nn.Linear(embed_size * heads, embed_size, bias=False)
+
+    def forward(self, x, mask=None):
+        """
+        :param x: [seq_len, batch_size, embed_size]
+        :param mask: [seq_len, seq_len]
+        :return:
+        """
+        out = torch.cat([i(x, mask) for i in self.self_attention_list], dim=-1)
+        out = self.fc(out)
+        return out
+
+
 class GPTBlock(nn.Module):
-    def __init__(self, feature_dim, num_heads, feedforward_dim):
+    def __init__(self, feature_dim, num_heads, feedforward_dim, dropout=0.1):
         super(GPTBlock, self).__init__()
-        self.self_attention = nn.MultiheadAttention(feature_dim, num_heads)
+        self.self_attention = MultiHeadAttention(feature_dim, num_heads, dropout)
+
         self.feed_forward = nn.Sequential(
-            nn.Linear(feature_dim, feedforward_dim),
+            nn.Linear(feature_dim, feedforward_dim, bias=False),
             nn.ReLU(),
-            nn.Linear(feedforward_dim, feature_dim)
+            nn.Linear(feedforward_dim, feature_dim, bias=False),
         )
         self.layer_norm1 = nn.LayerNorm(feature_dim)
         self.layer_norm2 = nn.LayerNorm(feature_dim)
 
     def forward(self, x, attn_mask=None):
-        attn_output, _ = self.self_attention(x, x, x, attn_mask=attn_mask)
+        attn_output = self.self_attention(x, attn_mask)
+
         x = x + attn_output
         x = self.layer_norm1(x)
 
@@ -79,15 +136,21 @@ class GPTBlock(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(self, feature_dim, num_heads, feedforward_dim, num_layers):
+    def __init__(self, feature_dim, num_heads, feedforward_dim, num_layers, dropout=0.1):
         super(GPT, self).__init__()
         self.blocks = nn.ModuleList([
-            GPTBlock(feature_dim, num_heads, feedforward_dim) for _ in range(num_layers)
+            GPTBlock(feature_dim, num_heads, feedforward_dim, dropout) for _ in range(num_layers)
         ])
 
     def forward(self, x, attn_mask=None):
+        with torch.no_grad():
+            pos_embed = rope_position_encoding(x.shape[0], x.shape[-1], x.device, theta=10000.0).unsqueeze(1)
+            x = x.permute(1, 0, 2)
+            pos_embed = pos_embed.permute(1, 0, 2)
         for block in self.blocks:
+            x = x + pos_embed
             x = block(x, attn_mask)
+        x = x.permute(1, 0, 2)
         return x
 
 
@@ -100,26 +163,24 @@ class MMModel(nn.Module):
                  num_layers,
                  heads,
                  dropout=0.1,
-                 res_net_block_num=192,
-                 res_net_block_layer_num=6,
                  ):
         super(MMModel, self).__init__()
-        self.gpt = GPT(embed_size, heads, feedforward_size, num_layers)
-        self.dropout = nn.Dropout(dropout)
-        self.res_net = ResNet(embed_size, res_net_block_num, res_net_block_layer_num, bias=False)
+        self.gpt = GPT(embed_size, heads, feedforward_size, num_layers, dropout)
+        # self.dropout = nn.Dropout(dropout)
+        # self.res_net = ResNet(embed_size, res_net_block_num, res_net_block_layer_num, bias=False)
         self.fc_out = nn.Linear(embed_size, vocab_size)
 
     def forward(self, x, mask=None):
         """
 
-        :param x:  [N, seq_len, embed_size]
+        :param x:  [seq_len, N, embed_size]
         :param mask: [seq_len, seq_len]
         :return:
         """
-        x = self.dropout(x)
+        # x = self.dropout(x)
         out = self.gpt(x, attn_mask=mask)
         # out = self.res_net(torch.cat([x, out], dim=-1))
-        out = self.res_net(out)
+        # out = self.res_net(out)
         out = self.fc_out(out)
         return out
 
@@ -166,6 +227,59 @@ class RotateEmbedding(nn.Module):
         return x + self.t(idx).unsqueeze(0).expand(N, seq_len, embed_size)
 
 
+def precompute_freqs_cis(dim: int, seq_len: int, theta: float = 10000.0):
+    """使用llama的函数式ROPE实现取代原来的RotateEmbedding的实现"""
+    # 计算词向量元素两两分组之后，每组元素对应的旋转角度
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    # 生成 token 序列索引 t = [0, 1,..., seq_len-1]
+    t = torch.arange(seq_len, device=freqs.device)
+    # freqs.shape = [seq_len, dim // 2]
+    freqs = torch.outer(t, freqs).float()
+    # torch.polar 的文档
+    # https://pytorch.org/docs/stable/generated/torch.polar.html
+    # 计算结果是个复数向量
+    # 假设 freqs = [x, y]
+    # 则 freqs_cis = [cos(x) + sin(x)i, cos(y) + sin(y)i]
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_cis
+
+
+def rope_position_encoding(seq_len, embed_size, device, theta=10000.0):
+    """
+    生成旋转位置编码
+    :param seq_len: 序列长度
+    :param embed_size: 嵌入维度
+    :param theta: 旋转位置编码参数
+    :return: 旋转位置编码张量
+    """
+    # # make tensor
+    # t = torch.zeros(seq_len, embed_size)
+    #
+    # # init tensor
+    # for i in range(seq_len):
+    #     for j in range(0, embed_size, 2):
+    #         t[i, j] = math.sin(i / (theta ** (j / embed_size)))
+    #         t[i, j + 1] = math.cos(i / (theta ** (j / embed_size)))
+    #
+    # return t
+
+    # a speed up version
+
+    # sin_off_vec = [0, 0.5pi, 0, 0.5pi, 0, 0.5pi, ...]
+    # 这个向量用于偏移 sin 函数， 令其的效果为 cos 函数
+    sin_off_vec = torch.zeros(embed_size).to(device)
+    sin_off_vec[torch.cos(torch.arange(0, embed_size).to(device) * torch.pi) < 0] = torch.pi * 0.5
+
+    # base_vec = (theta ** (j / embed_size)
+    # 这个向量用于计算旋转位置编码的基础值
+    base_vec = theta ** (torch.arange(0, embed_size, 2).to(device).float() / embed_size)
+    base_vec = torch.stack([base_vec, base_vec], dim=-1).reshape(-1)
+
+    idx = torch.arange(seq_len).to(device)
+
+    return torch.sin(idx.unsqueeze(-1) / base_vec + sin_off_vec)
+
+
 def get_mean_token_size():
     tokenizer = get_tokenizer()
     dataset = get_train_dataset(keep_in_memory=True)
@@ -207,7 +321,6 @@ def generate_mask(seq_len, device):
     :return:
     """
     return nn.Transformer.generate_square_subsequent_mask(seq_len, device)
-
 
 
 def train_transformer(dataset, train_dir):
@@ -253,7 +366,7 @@ def train_transformer(dataset, train_dir):
     # print model info
     accelerator.print(
         f"model structure: {transformer}",
-        f"model parameters: {sum(p.numel() for p in transformer.parameters())}",
+        f"model parameters: {sum(p.numel() for p in transformer.parameters()) / (10 ** 9)}",
         f"optimizer: {optimizer}",
         f"scheduler: {scheduler}",
         f"loss_function: {loss_function}",
@@ -275,7 +388,7 @@ def train_transformer(dataset, train_dir):
     embedding = get_embedding(tokenizer).to(accelerator.device)
     embedding.eval()
     # 启用旋转位置编码
-    position_encoding = RotateEmbedding(max_seq_len, config.module['embed_size']).to(accelerator.device)
+    # position_encoding = RotateEmbedding(max_seq_len, config.module['embed_size']).to(accelerator.device)
 
     with LocalSGD(accelerator=accelerator,
                   model=transformer,
@@ -288,8 +401,8 @@ def train_transformer(dataset, train_dir):
                 with torch.no_grad():
                     label = torch.tensor(ids_data).to(accelerator.device)
                     data = embedding(label)
-                    data = position_encoding(data)
-                    data = data + torch.randn_like(data) * 0.01
+                    # data = position_encoding(data)
+                    # data = data + torch.randn_like(data) * 0.01
 
                     # shape[batch_size, seq_len, embed_size] -> [seq_len, batch_size, embed_size]
                     data = data.permute(1, 0, 2)
@@ -321,7 +434,6 @@ def train_transformer(dataset, train_dir):
                     accelerator.save_state(os.path.join(train_dir, 'model_backup'))
                     accelerator.save_state(os.path.join(train_dir, 'model'))
                     train_ctx.export_loss_data(train_dir)
-
 
 
 def check_transformer(input_str, train_dir='./data/transformer'):

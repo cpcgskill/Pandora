@@ -25,7 +25,7 @@ if False:
 # generate_train_and_test_dataset(chunk_size=512)
 
 def start():
-    from pandora.data.post_processe import get_pretokenize_dataset, get_main_dataset
+    # from pandora.data.post_processe import get_pretokenize_dataset, get_main_dataset
     # from pandora.CBOW import train_embedding, build_embedding
     # train_embedding(get_main_dataset(keep_in_memory=True), './data/embedding2')
     # build_embedding('./data/embedding2', '/root/autodl-fs/embedding.pt')
@@ -37,8 +37,8 @@ def start():
     # build_embedding_from_skip_gram('./data/skip_gram')
     from pandora.kernel import train_transformer,check_transformer
     from pandora.data.post_processe import get_train_dataset
-    train_transformer(get_train_dataset(keep_in_memory=True), './data/transformer10')
-    # check_transformer('give me a python example.\n', './data/transformer4')
+    train_transformer(get_train_dataset(keep_in_memory=False), './data/transformer24')
+    # check_transformer('give me a python example.\n', './data/transformer22')
     # check_transformer('give me a python example.\n', './data/transformer3')
 
 

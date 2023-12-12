@@ -16,12 +16,10 @@ tokenizer_path = './tokenizer.json'
 
 module = {
     "embed_size": 768,
-    "feedforward_size": 3072,
-    "num_layers": 32,
+    "feedforward_size": 768*8,
+    "num_layers": 8,
     "heads": 12,
     "dropout": 0.1,
-    "res_net_block_num": 64,
-    "res_net_block_layer_num": 6
 }
 
 train = {
