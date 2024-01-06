@@ -23,16 +23,14 @@ import pandora.tokenizer_ as tokenizer_
 
 cache_dir = './hugging_hub_cache'
 cpu_count = os.cpu_count()
-tokenizer = tokenizer_.get_tokenizer()
 
-
-def pretokenize_function(data):
+def pretokenize_function(tokenizer, data):
     return {'ids': [i.ids for i in tokenizer.encode_batch(data['text'])]}
 
 
-def pretokenize_dataset(dataset, keep_in_memory=False):
+def pretokenize_dataset(tokenizer, dataset, keep_in_memory=False):
     dataset = dataset.map(
-        pretokenize_function,
+        functools.partial(pretokenize_function, tokenizer),
         batched=True,
         num_proc=cpu_count,
         keep_in_memory=keep_in_memory,
@@ -44,7 +42,13 @@ def pretokenize_dataset(dataset, keep_in_memory=False):
 def _segmentation_function(data, chunk_size=512):
     output = []
     for i in data['ids']:
-        output.extend(i[j:j + chunk_size] for j in range(0, len(i), chunk_size))
+        if len(i) < chunk_size:
+            output.append(i)
+        else:
+            start_ids = list(range(0, len(i), chunk_size))
+            output.extend(i[j:j + chunk_size] for j in start_ids[:-1])
+            last_start_id = len(i) - chunk_size
+            output.append(i[last_start_id:])
     return {'ids': output}
 
 
@@ -59,6 +63,20 @@ def segmentation_dataset(dataset, chunk_size=512, keep_in_memory=False):
     )
     return dataset
 
+def extract_tail_function(data, chunk_size=512):
+    return {'ids': [i[-chunk_size:] for i in data['ids']]}
+
+def extract_tail_dataset(dataset, chunk_size=512, keep_in_memory=False):
+    # segmentation
+    dataset = dataset.map(
+        functools.partial(extract_tail_function, chunk_size=chunk_size),
+        batched=True,
+        num_proc=cpu_count,
+        keep_in_memory=keep_in_memory,
+        remove_columns=dataset.column_names,
+    )
+    return dataset
+
 
 def split_dataset(dataset, keep_in_memory=False):
     # split dataset for train and test
@@ -66,9 +84,9 @@ def split_dataset(dataset, keep_in_memory=False):
     return dataset['train'], dataset['test']
 
 
-def generate_pretokenize_dataset(keep_in_memory=False):
+def generate_pretokenize_dataset(tokenizer, keep_in_memory=False):
     dataset = load_from_disk('./dataset/main')
-    dataset = pretokenize_dataset(dataset)
+    dataset = pretokenize_dataset(tokenizer, dataset)
     dataset.save_to_disk('./dataset/main_pretokenize')
 
 
@@ -110,11 +128,11 @@ def process_embedding_dataset(data):
     return {'pair': list(zip(data['ids'][:-1], data['ids'][1:]))}
 
 
-def generate_embedding_dataset(keep_in_memory=False):
+def generate_embedding_dataset(tokenizer, keep_in_memory=False):
     dataset_list = []
 
     dataset = load_from_disk('./dataset/base')
-    dataset = pretokenize_dataset(dataset)
+    dataset = pretokenize_dataset(tokenizer, dataset)
     dataset = dataset.map(
         process_embedding_dataset,
         batched=True,
@@ -125,7 +143,7 @@ def generate_embedding_dataset(keep_in_memory=False):
     dataset_list.append(dataset)
 
     dataset = load_from_disk('./dataset/textbook_base')
-    dataset = pretokenize_dataset(dataset)
+    dataset = pretokenize_dataset(tokenizer, dataset)
     dataset = dataset.map(
         process_embedding_dataset,
         batched=True,

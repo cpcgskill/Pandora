@@ -21,6 +21,7 @@ if False:
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import LRScheduler
+import numpy as np
 import matplotlib.pyplot as plt
 
 
@@ -56,15 +57,18 @@ class WarmupScheduler(LRScheduler):
         self.max_lr = max_lr
         self.gamma = gamma
         self.now_lr = init_lr
+        self.lr_list = []
         super(WarmupScheduler, self).__init__(optimizer, last_epoch)
 
     def get_lr(self):
         if self.last_epoch < self.warmup_epochs:
             self.now_lr = self.init_lr + (self.max_lr - self.init_lr) * (self.last_epoch / self.warmup_epochs)
+        elif self.last_epoch == self.warmup_epochs:
+            self.now_lr = self.max_lr
         else:
             # lr = (self.max_lr - self.base_lr) * (1 / (self.last_epoch + 1)) + self.base_lr
             self.now_lr = self.now_lr * self.gamma
-
+        self.lr_list.append(self.now_lr)
         return [self.now_lr for _ in self.base_lrs]
 
 
@@ -79,6 +83,10 @@ def print_loss_list_graph(loss_list):
     plt.xlabel("step")
     plt.ylabel("loss")
 
+    # 设置平均分布的刻度
+    plt.grid(True)
+
+
     plt.show()
 
 
@@ -92,6 +100,9 @@ def save_loss_list_graph(loss_list, path):
     plt.title("Loss curve")
     plt.xlabel("step")
     plt.ylabel("loss")
+
+    # 设置平均分布的参考线
+    plt.grid(True)
 
     plt.savefig(path)
 

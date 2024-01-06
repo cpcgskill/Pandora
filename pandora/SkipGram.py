@@ -65,8 +65,8 @@ def train_skip_gram(dataset, train_dir):
     # train
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=256,
-        shuffle=True,
+        batch_size=128,
+        # shuffle=True,
         pin_memory=True,
     )
     optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)

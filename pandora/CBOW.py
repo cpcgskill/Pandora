@@ -172,23 +172,23 @@ def build_embedding(train_dir):
     torch.save(model.embed.state_dict(), "/root/autodl-fs/embedding.pt")
 
 
-def make_embedding(tokenizer):
+def make_embedding(config, tokenizer):
     # make embedding
-    return nn.Embedding(tokenizer.get_vocab_size(), config.module['embed_size'])
+    return nn.Embedding(tokenizer.get_vocab_size(), config.embed_size)
 
 
-def get_embedding(tokenizer):
+def get_embedding(config, tokenizer):
     # load embedding
-    embedding = make_embedding(tokenizer)
+    embedding = make_embedding(config, tokenizer)
     # state_dict = accelerator.load_state("/root/autodl-fs/skip_gram.in_embed.pth")
     state_dict = torch.load("/root/autodl-fs/embedding.pt")
     embedding.load_state_dict(state_dict)
     return embedding
 
 
-def test_embedding():
-    tokenizer = get_tokenizer()
-    embedding = get_embedding(tokenizer)
+def test_embedding(config):
+    tokenizer = get_tokenizer(config)
+    embedding = get_embedding(config, tokenizer)
     # test skip_gram
     print("test skip_gram")
     embedding.eval()

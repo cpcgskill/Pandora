@@ -11,6 +11,10 @@
 
 """
 from __future__ import unicode_literals, print_function, division
+
+import functools
+import json
+import sys
 from typing import *
 
 import math
@@ -28,9 +32,7 @@ from accelerate.local_sgd import LocalSGD
 from pandora.data.post_processe import get_train_dataset
 from pandora.tokenizer_ import get_tokenizer
 from pandora.CBOW import get_embedding
-# from pandora.SkipGram import get_embedding
-from pandora import config
-from pandora.utils import add_random_value_by_weights, WarmupScheduler, TrainCtx
+from pandora.utils import WarmupScheduler, TrainCtx
 from aidevkit.component import GradientLayer
 
 
@@ -57,23 +59,32 @@ class ResNet(nn.Module):
 class SelfAttention(nn.Module):
     """一个单头的自注意力层"""
 
-    def __init__(self, embed_size, dopout=0.1):
+    def __init__(self, embed_size, dropout=0.1):
         super(SelfAttention, self).__init__()
         self.embed_size = embed_size
-        self.dopout = dopout
+        self.dropout = dropout
 
         self.q = nn.Linear(embed_size, embed_size, bias=False)
         self.k = nn.Linear(embed_size, embed_size, bias=False)
         self.v = nn.Linear(embed_size, embed_size, bias=False)
-    def forward(self, x, attn_mask=None):
+
+        self.layer_norm1 = nn.LayerNorm(embed_size)
+        self.layer_norm2 = nn.LayerNorm(embed_size)
+
+    def forward(self, x, attn_mask=None, pos_embed=None):
         """
         :param x: [seq_len, batch_size, embed_size]
         :param attn_mask: [seq_len, seq_len]
+        :param pos_embed: [seq_len, batch_size, embed_size]
         :return:
         """
         q = self.q(x)
         k = self.k(x)
         v = self.v(x)
+
+        q = self.layer_norm1(q + x) + pos_embed
+        k = self.layer_norm1(k + x) + pos_embed
+        v = self.layer_norm1(v + x)
 
         # [seq_len, batch_size, embed_size] * [seq_len, batch_size, embed_size] -> [seq_len, batch_size, seq_len]
         attn = nn.functional.scaled_dot_product_attention(
@@ -81,9 +92,10 @@ class SelfAttention(nn.Module):
             k,
             v,
             attn_mask=attn_mask,
-            dropout_p=self.dopout if self.training else 0.0,
+            dropout_p=self.dropout if self.training else 0.0,
         )
-        return attn
+
+        return self.layer_norm2(attn + x)
 
 
 class MultiHeadAttention(nn.Module):
@@ -97,16 +109,41 @@ class MultiHeadAttention(nn.Module):
         ])
 
         self.fc = nn.Linear(embed_size * heads, embed_size, bias=False)
+        self.layer_norm = nn.LayerNorm(embed_size)
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, pos_embed=None):
         """
         :param x: [seq_len, batch_size, embed_size]
         :param mask: [seq_len, seq_len]
+        :param pos_embed: [seq_len, batch_size, embed_size]
         :return:
         """
-        out = torch.cat([i(x, mask) for i in self.self_attention_list], dim=-1)
+        out = torch.cat([i(x, mask, pos_embed) for i in self.self_attention_list], dim=-1)
         out = self.fc(out)
-        return out
+        return self.layer_norm(out + x)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, embed_size, feedforward_dim):
+        super(FeedForward, self).__init__()
+        self.embed_size = embed_size
+        self.feedforward_dim = feedforward_dim
+
+        self.fc1 = nn.Linear(embed_size, feedforward_dim, bias=False)
+        self.silu = nn.SiLU()
+        self.fc2 = nn.Linear(feedforward_dim, embed_size, bias=False)
+
+        self.layer_norm = nn.LayerNorm(embed_size)
+
+    def forward(self, x):
+        """
+        :param x: [seq_len, batch_size, embed_size]
+        :return:
+        """
+        out = self.fc1(x)
+        out = self.silu(out)
+        out = self.fc2(out)
+        return self.layer_norm(out + x)
 
 
 class GPTBlock(nn.Module):
@@ -114,43 +151,11 @@ class GPTBlock(nn.Module):
         super(GPTBlock, self).__init__()
         self.self_attention = MultiHeadAttention(feature_dim, num_heads, dropout)
 
-        self.feed_forward = nn.Sequential(
-            nn.Linear(feature_dim, feedforward_dim, bias=False),
-            nn.ReLU(),
-            nn.Linear(feedforward_dim, feature_dim, bias=False),
-        )
-        self.layer_norm1 = nn.LayerNorm(feature_dim)
-        self.layer_norm2 = nn.LayerNorm(feature_dim)
+        self.feed_forward = FeedForward(feature_dim, feedforward_dim)
 
-    def forward(self, x, attn_mask=None):
-        attn_output = self.self_attention(x, attn_mask)
-
-        x = x + attn_output
-        x = self.layer_norm1(x)
-
-        ff_output = self.feed_forward(x)
-        x = x + ff_output
-        x = self.layer_norm2(x)
-
-        return x
-
-
-class GPT(nn.Module):
-    def __init__(self, feature_dim, num_heads, feedforward_dim, num_layers, dropout=0.1):
-        super(GPT, self).__init__()
-        self.blocks = nn.ModuleList([
-            GPTBlock(feature_dim, num_heads, feedforward_dim, dropout) for _ in range(num_layers)
-        ])
-
-    def forward(self, x, attn_mask=None):
-        with torch.no_grad():
-            pos_embed = rope_position_encoding(x.shape[0], x.shape[-1], x.device, theta=10000.0).unsqueeze(1)
-            x = x.permute(1, 0, 2)
-            pos_embed = pos_embed.permute(1, 0, 2)
-        for block in self.blocks:
-            x = x + pos_embed
-            x = block(x, attn_mask)
-        x = x.permute(1, 0, 2)
+    def forward(self, x, attn_mask=None, pos_embed=None):
+        x = self.self_attention(x, attn_mask, pos_embed)
+        x = self.feed_forward(x)
         return x
 
 
@@ -159,13 +164,15 @@ class MMModel(nn.Module):
     def __init__(self,
                  vocab_size,
                  embed_size,
-                 feedforward_size,
+                 feedforward_dim,
                  num_layers,
-                 heads,
+                 num_heads,
                  dropout=0.1,
                  ):
         super(MMModel, self).__init__()
-        self.gpt = GPT(embed_size, heads, feedforward_size, num_layers, dropout)
+        self.blocks = nn.ModuleList([
+            GPTBlock(embed_size, num_heads, feedforward_dim, dropout) for _ in range(num_layers)
+        ])
         # self.dropout = nn.Dropout(dropout)
         # self.res_net = ResNet(embed_size, res_net_block_num, res_net_block_layer_num, bias=False)
         self.fc_out = nn.Linear(embed_size, vocab_size)
@@ -177,54 +184,13 @@ class MMModel(nn.Module):
         :param mask: [seq_len, seq_len]
         :return:
         """
-        # x = self.dropout(x)
-        out = self.gpt(x, attn_mask=mask)
-        # out = self.res_net(torch.cat([x, out], dim=-1))
-        # out = self.res_net(out)
-        out = self.fc_out(out)
+        with torch.no_grad():
+            pos_embed = rope_position_encoding(x.shape[1], x.shape[-1], x.device, theta=10000.0).unsqueeze(0)
+        for block in self.blocks:
+            x = block(x, mask, pos_embed)
+        x = x + pos_embed
+        out = self.fc_out(x)
         return out
-
-
-class RotateEmbedding(nn.Module):
-    """
-    一个用旋转位置编码初始化的嵌入层
-    并且使用旋转位置编码初始化这个张量
-    """
-
-    def __init__(self, seq_len, embed_size):
-        """
-
-        :param seq_len: 序列长度
-        :param embed_size: 嵌入维度
-        """
-        assert embed_size % 2 == 0, "embed_size must be even"
-
-        super(RotateEmbedding, self).__init__()
-        self.seq_len = seq_len
-        self.embed_size = embed_size
-
-        # make tensor
-        self.t = nn.Embedding(seq_len, embed_size)
-
-        # init tensor
-        for i in range(seq_len):
-            for j in range(0, embed_size, 2):
-                self.t.weight.data[i, j] = math.sin(i / (10000 ** (j / embed_size)))
-                self.t.weight.data[i, j + 1] = math.cos(i / (10000 ** (j / embed_size)))
-
-    def forward(self, x):
-        """
-
-        :param x: 输入张量
-        :return: 旋转位置编码后的张量
-        """
-        N, seq_len, embed_size = x.shape
-        assert seq_len <= self.seq_len, "seq_len must be less than RotateEmbedding.seq_len"
-        assert embed_size == self.embed_size, "embed_size must be equal to RotateEmbedding.embed_size"
-
-        idx = torch.arange(seq_len).to(x.device)
-
-        return x + self.t(idx).unsqueeze(0).expand(N, seq_len, embed_size)
 
 
 def precompute_freqs_cis(dim: int, seq_len: int, theta: float = 10000.0):
@@ -244,6 +210,7 @@ def precompute_freqs_cis(dim: int, seq_len: int, theta: float = 10000.0):
     return freqs_cis
 
 
+@functools.lru_cache(maxsize=3)
 def rope_position_encoding(seq_len, embed_size, device, theta=10000.0):
     """
     生成旋转位置编码
@@ -280,6 +247,44 @@ def rope_position_encoding(seq_len, embed_size, device, theta=10000.0):
     return torch.sin(idx.unsqueeze(-1) / base_vec + sin_off_vec)
 
 
+# 生成旋转矩阵
+def precompute_freqs_cis(dim: int, seq_len: int, theta: float = 10000.0):
+    # 计算词向量元素两两分组之后，每组元素对应的旋转角度\theta_i
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    # 生成 token 序列索引 t = [0, 1,..., seq_len-1]
+    t = torch.arange(seq_len, device=freqs.device)
+    # freqs.shape = [seq_len, dim // 2]
+    freqs = torch.outer(t, freqs).float()  # 计算m * \theta
+
+    # 计算结果是个复数向量
+    # 假设 freqs = [x, y]
+    # 则 freqs_cis = [cos(x) + sin(x)i, cos(y) + sin(y)i]
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_cis
+
+
+# 旋转位置编码计算
+def apply_rotary_emb(
+        xq: torch.Tensor,
+        xk: torch.Tensor,
+        freqs_cis: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    # xq.shape = [batch_size, seq_len, dim]
+    # xq_.shape = [batch_size, seq_len, dim // 2, 2]
+    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 2)
+    xk_ = xk.float().reshape(*xk.shape[:-1], -1, 2)
+
+    # 转为复数域
+    xq_ = torch.view_as_complex(xq_)
+    xk_ = torch.view_as_complex(xk_)
+
+    # 应用旋转操作，然后将结果转回实数域
+    # xq_out.shape = [batch_size, seq_len, dim]
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(2)
+    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(2)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
+
 def get_mean_token_size():
     tokenizer = get_tokenizer()
     dataset = get_train_dataset(keep_in_memory=True)
@@ -297,10 +302,15 @@ def get_mean_token_size():
     return int(mean_size.item())
 
 
-def new_model(tokenizer):
+def new_model(config, tokenizer):
+    # type: (config.Config, tokenizers.Tokenizer) -> MMModel
     return MMModel(
         tokenizer.get_vocab_size(),
-        **config.module
+        config.embed_size,
+        config.feedforward_dim,
+        config.num_layers,
+        config.num_heads,
+        config.dropout,
     )
 
 
@@ -323,24 +333,25 @@ def generate_mask(seq_len, device):
     return nn.Transformer.generate_square_subsequent_mask(seq_len, device)
 
 
-def train_transformer(dataset, train_dir):
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
+def train_transformer(config, dataset, train_dir):
+    # type: (config.Config, datasets.Dataset, str) -> None
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.gradient_accumulation_steps)
 
-    tokenizer = get_tokenizer()
+    tokenizer = get_tokenizer(config)
 
-    transformer = new_model(tokenizer)
+    transformer = new_model(config, tokenizer)
     train_ctx = TrainCtx()
 
     optimizer = torch.optim.Adam(transformer.parameters(),
-                                 lr=config.train['init_lr'],
+                                 lr=config.init_lr,
                                  )
     scheduler = WarmupScheduler(optimizer,
-                                config.train['warmup_epochs'] / config.train['gradient_accumulation_steps'],
-                                init_lr=config.train['init_lr'],
-                                max_lr=config.train['max_lr'],
-                                gamma=config.train['gamma'],
+                                config.warmup_epochs / config.gradient_accumulation_steps,
+                                init_lr=config.init_lr,
+                                max_lr=config.max_lr,
+                                gamma=config.gamma,
                                 )
-    loss_function = nn.CrossEntropyLoss(ignore_index=3)
+    loss_function = nn.CrossEntropyLoss(ignore_index=4)
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -377,22 +388,13 @@ def train_transformer(dataset, train_dir):
     # transformer.compute()
     optimizer.zero_grad()
 
-    # #  启用填充，最大长度为1024， 对于长度不足1024的序列，用3填充。 对于长度超过1024的序列，进行截断
-    # tokenizer.enable_padding(length=max_seq_len, pad_id=3, pad_token="[PAD]")
-
-    # 使用数据集的平均长度作为最大长度， 这个长度可以通过 get_mean_token_size() 函数获取
-    max_seq_len = 512
-    #  启用截断
-    tokenizer.enable_truncation(max_length=max_seq_len)
     # make embedding
-    embedding = get_embedding(tokenizer).to(accelerator.device)
+    embedding = get_embedding(config, tokenizer).to(accelerator.device)
     embedding.eval()
-    # 启用旋转位置编码
-    # position_encoding = RotateEmbedding(max_seq_len, config.module['embed_size']).to(accelerator.device)
 
     with LocalSGD(accelerator=accelerator,
                   model=transformer,
-                  local_sgd_steps=config.train["gradient_accumulation_steps"] * 16,
+                  local_sgd_steps=config.gradient_accumulation_steps * 16,
                   enabled=True) as local_sgd:
         for ids_data in tqdm.tqdm(data_loader, disable=not accelerator.is_local_main_process):
             train_ctx.step += 1
@@ -401,23 +403,19 @@ def train_transformer(dataset, train_dir):
                 with torch.no_grad():
                     label = torch.tensor(ids_data).to(accelerator.device)
                     data = embedding(label)
-                    # data = position_encoding(data)
                     # data = data + torch.randn_like(data) * 0.01
 
-                    # shape[batch_size, seq_len, embed_size] -> [seq_len, batch_size, embed_size]
-                    data = data.permute(1, 0, 2)
-                    label = label.permute(1, 0)
-
-                    mask = generate_mask(data.size(0), accelerator.device)
+                    mask = generate_mask(data.size(1), accelerator.device)
                 if accelerator.is_main_process and accelerator.num_processes > 1:
-                    prediction_length = config.train['main_prediction_length']
+                    prediction_length = config.main_prediction_length
                 else:
-                    prediction_length = config.train['prediction_length']
+                    prediction_length = config.prediction_length
                 for i in range(-prediction_length, 0):
-                    sub_data = data[:data.size(0) + i]
-                    sub_mask = mask[:mask.size(0) + i, :mask.size(1) + i]
+                    with torch.no_grad():
+                        sub_data = data[:, :data.size(1) + i]
+                        sub_mask = mask[:mask.size(0) + i, :mask.size(0) + i]
                     sub_output = transformer(sub_data, mask=sub_mask)
-                sub_label = label[1:label.size(0) + i + 1]
+                sub_label = label[:, 1:label.size(1) + i + 1]
                 loss = loss_function(sub_output.view(-1, tokenizer.get_vocab_size()), sub_label.view(-1))
                 if accelerator.is_main_process:
                     train_ctx.loss_list.append(loss.item())
@@ -430,28 +428,46 @@ def train_transformer(dataset, train_dir):
                 if not accelerator.is_main_process:
                     continue
                 # in main process
-                if (train_ctx.step + 1) % 2000 == 0:
+                if (train_ctx.step + 1) % 1000 == 0:
                     accelerator.save_state(os.path.join(train_dir, 'model_backup'))
                     accelerator.save_state(os.path.join(train_dir, 'model'))
                     train_ctx.export_loss_data(train_dir)
+                    with open(os.path.join(train_dir, 'config.json'), 'w') as f:
+                        json.dump(
+                            config.to_dict(), f,
+                            indent=4, ensure_ascii=False,
+                        )
+
+    if not accelerator.is_main_process:
+        return
+    # in main process
+    accelerator.save_state(os.path.join(train_dir, 'model_backup'))
+    accelerator.save_state(os.path.join(train_dir, 'model'))
+    train_ctx.export_loss_data(train_dir)
+    with open(os.path.join(train_dir, 'config.json'), 'w') as f:
+        json.dump(
+            config.to_dict(), f,
+            indent=4, ensure_ascii=False,
+        )
 
 
-def check_transformer(input_str, train_dir='./data/transformer'):
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.train['gradient_accumulation_steps'])
+def check_transformer(config, input_str, train_dir='./data/transformer'):
+    # type: (config.Config, str, str) -> None
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=config.gradient_accumulation_steps)
 
-    tokenizer = get_tokenizer()
+    tokenizer = get_tokenizer(config)
 
-    transformer = new_model(tokenizer)
+    transformer = new_model(config, tokenizer)
     train_ctx = TrainCtx()
 
     optimizer = torch.optim.Adam(transformer.parameters(),
-                                 lr=config.train['init_lr'],
+                                 lr=config.init_lr,
                                  )
     scheduler = WarmupScheduler(optimizer,
-                                config.train['warmup_epochs'] / config.train['gradient_accumulation_steps'],
-                                init_lr=config.train['init_lr'],
-                                max_lr=config.train['max_lr'],
-                                gamma=config.train['gamma'],
+                                config.warmup_epochs / config.gradient_accumulation_steps,
+                                init_lr=config.init_lr,
+                                max_lr=config.max_lr,
+                                gamma=config.gamma,
                                 )
     loss_function = nn.CrossEntropyLoss(ignore_index=3)
 
@@ -479,76 +495,40 @@ def check_transformer(input_str, train_dir='./data/transformer'):
     # prepare training
     transformer.eval()
 
-    #
-    max_seq_len = 698
-    # #  启用填充，最大长度为1024， 对于长度不足1024的序列，用3填充。 对于长度超过1024的序列，进行截断
-    # tokenizer.enable_padding(length=max_seq_len, pad_id=3, pad_token="[PAD]")
-    #  启用截断，最大长度为1024
-    tokenizer.enable_truncation(max_length=max_seq_len)
     # make embedding
-    embedding = get_embedding(tokenizer).to(accelerator.device)
+    embedding = get_embedding(config, tokenizer).to(accelerator.device)
     embedding.eval()
-    # 启用旋转位置编码
-    position_encoding = RotateEmbedding(max_seq_len, 768).to(accelerator.device)
-    position_encoding.eval()
 
+    sys.stdout.write(input_str)
     # process data
     with torch.no_grad():
         split_data = tokenizer.encode_batch([input_str])
         label = torch.tensor([i.ids for i in split_data]).to(accelerator.device)
         label = label[:, :-1]
-        for _ in range(500):
+        for _ in range(4096):
             data = embedding(label)
-            data = position_encoding(data)
-            # data = data + torch.randn_like(data) * 0.1
-
-            data = data.permute(1, 0, 2)
 
             mask = generate_mask(data.size(0), accelerator.device)
 
             output = transformer(data, mask=mask)
-            output = output.permute(1, 0, 2)
 
-            # print original text
-            accelerator.print('original text:', input_str[:100])
-            # get result, get max index
-            # result = torch.argmax(output, dim=-1)
-            ## if now result equal previous, add random
-            # result = torch.argmax(output, dim=-1)
-            # if label[0, -1].equal(result[0, -1]):
-            #     softmaxed_output = torch.softmax(output, dim=-1).reshape(output.shape[0]*output.shape[1], -1)
-            #     result = torch.multinomial(softmaxed_output, num_samples=1).reshape(output.shape[0], output.shape[1])
-
-            top_probs, top_idx = torch.topk(output, k=10, dim=-1)
+            top_probs, top_idx = torch.topk(output, k=2, dim=-1)
             softmaxed_output = torch.softmax(top_probs, dim=-1).reshape(top_probs.shape[0] * top_probs.shape[1], -1)
 
             result = torch.multinomial(softmaxed_output, num_samples=1).reshape(top_probs.shape[0], top_probs.shape[1])
             result = top_idx.gather(dim=-1, index=result.reshape(result.shape[0], result.shape[1], 1))
             result = result.reshape(top_idx.shape[0], top_idx.shape[1])
 
-            accelerator.print('result ids:', result[:, 0][:100])
-            # to text token list
-            token_result = [tokenizer.id_to_token(i) for i in result[:, 0].tolist()]
-            accelerator.print('result token list:', token_result[:100])
-            # to text
-            text_result = tokenizer.decode_batch(result.tolist())
-            accelerator.print('result text:', text_result[0])
-
+            # output text
+            old_str = tokenizer.decode_batch(label.tolist())[0]
             # add next token mask
             label = torch.cat([label, result[:, -1:]], dim=-1)
-
-            # output text
-            print('output text:', tokenizer.decode_batch(label.tolist())[0])
+            #
+            new_str = tokenizer.decode_batch(label.tolist())[0]
+            sys.stdout.write(new_str[len(old_str):])
             if tokenizer.decode_batch(label.tolist())[0].rfind('[EOS]') != -1:
                 break
 
 
-if __name__ == '__main__':
-    # check_transformer('/root/autodl-tmp/project/data_v1/transformer')
-    check_transformer('''title:
-    Kopylovo, Vologodsky District, Vologda Oblast
-    text:
-    Kopylovo () is a''')
-    check_transformer('''question: what is your name?
-answer:''')
-    # train_transformer()
+
+

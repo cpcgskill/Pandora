@@ -12,24 +12,33 @@
 """
 from __future__ import unicode_literals, print_function, division
 
-tokenizer_path = './tokenizer.json'
+import dataclasses
 
-module = {
-    "embed_size": 768,
-    "feedforward_size": 768*8,
-    "num_layers": 8,
-    "heads": 12,
-    "dropout": 0.1,
-}
 
-train = {
-    "gradient_accumulation_steps": 12,
+@dataclasses.dataclass
+class Config:
+    tokenizer_path = './tokenizer.json'
+    # model config
+    embed_size: int = 768
+    feedforward_dim: int = 768 * 8
+    num_layers: int = 16
+    num_heads: int = 12
+    dropout: float = 0.1
 
-    "warmup_epochs": 10_000,
-    "init_lr": 0.00000025,
-    "max_lr": 0.0000125,
-    "gamma": 0.97,
+    # train config
+    gradient_accumulation_steps: int = 12
 
-    "prediction_length": 3,
-    "main_prediction_length": 1,
-}
+    warmup_epochs: int = 30_000
+    init_lr: float = 6.521404165561944e-08
+    max_lr: float = 0.00016352170540541642
+    gamma: float = 0.9835730074875503
+
+    prediction_length: int = 1
+    main_prediction_length: int = 1
+
+    def to_dict(self):
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**d)

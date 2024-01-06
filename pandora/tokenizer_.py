@@ -21,7 +21,6 @@ from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.processors import TemplateProcessing
 from tokenizers import decoders
 
-from pandora import config
 
 def make_tokenizer():
     tokenizer = Tokenizer(WordPiece(unk_token="[UNK]"))
@@ -43,8 +42,7 @@ def make_tokenizer():
     return tokenizer
 
 
-
-def train_tokenizer(dataset):
+def train_tokenizer(config, dataset):
     tokenizer = make_tokenizer()
     trainer = WordPieceTrainer(
         vocab_size=30522 * 5,
@@ -58,19 +56,16 @@ def train_tokenizer(dataset):
     )
     tokenizer.save(config.tokenizer_path)
 
-    test_tokenizer()
+    test_tokenizer(config)
 
 
-def test_tokenizer():
+def test_tokenizer(config):
     tokenizer = Tokenizer.from_file(config.tokenizer_path)
     # tokenizer.model = WordPiece.from_file(config.tokenizer_path)
     print(tokenizer.encode("Hello, y'all! How are you 😁 ?").tokens)
     print(tokenizer.encode("你好， 你还好吗？").tokens)
 
 
-def get_tokenizer() -> Tokenizer:
+def get_tokenizer(config) -> Tokenizer:
     tokenizer = Tokenizer.from_file(config.tokenizer_path)
     return tokenizer
-
-if __name__ == '__main__':
-    test_tokenizer()

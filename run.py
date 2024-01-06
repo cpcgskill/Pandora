@@ -12,9 +12,13 @@
 """
 from __future__ import unicode_literals, print_function, division
 
+import json
+import random
+
+import datasets
+
 if False:
     pass
-
 
 # from pandora.data.compile_dataset import get_main_dataset
 # from pandora.tokenizer_ import train_tokenizer
@@ -24,23 +28,66 @@ if False:
 # generate_pretokenize_dataset()
 # generate_train_and_test_dataset(chunk_size=512)
 
+from pandora.data.compile_dataset import get_custom_answer_dataset, get_main_dataset, get_custom_new_answer_dataset, get_merge_custom_answer_dataset
+from pandora.data.post_processe import *
+from pandora.tokenizer_ import get_tokenizer
+from pandora.config import Config
+from pandora.data.utils import dataset_cache
+
+config = Config()
+
+
+@dataset_cache
+def generate_train_and_test_dataset(dataset, keep_in_memory=False, chunk_size=512):
+    dataset = pretokenize_dataset(get_tokenizer(config), dataset, keep_in_memory=keep_in_memory)
+    dataset = segmentation_dataset(dataset, chunk_size=chunk_size)
+    train_dataset, test_dataset = split_dataset(dataset, keep_in_memory=keep_in_memory)
+    return train_dataset, test_dataset
+
+
+@dataset_cache
+def generate_extract_tail_dataset(dataset, keep_in_memory=False, chunk_size=512):
+    dataset = pretokenize_dataset(get_tokenizer(config), dataset, keep_in_memory=keep_in_memory)
+    dataset = extract_tail_dataset(dataset, chunk_size=chunk_size)
+    train_dataset, test_dataset = split_dataset(dataset, keep_in_memory=keep_in_memory)
+    return train_dataset, test_dataset
+
+train_dataset, test_dataset = generate_extract_tail_dataset(get_merge_custom_answer_dataset(), chunk_size=512)
+
+
 def start():
-    # from pandora.data.post_processe import get_pretokenize_dataset, get_main_dataset
+    from pandora.data.post_processe import get_pretokenize_dataset, get_main_dataset
     # from pandora.CBOW import train_embedding, build_embedding
     # train_embedding(get_main_dataset(keep_in_memory=True), './data/embedding2')
     # build_embedding('./data/embedding2', '/root/autodl-fs/embedding.pt')
+
     # from pandora.SkipGram import train_skip_gram, build_embedding_from_skip_gram
     # train_skip_gram(
     #     get_main_dataset().shuffle(keep_in_memory=True),
     #     './data/skip_gram',
     # )
     # build_embedding_from_skip_gram('./data/skip_gram')
-    from pandora.kernel import train_transformer,check_transformer
-    from pandora.data.post_processe import get_train_dataset
-    train_transformer(get_train_dataset(keep_in_memory=False), './data/transformer24')
-    # check_transformer('give me a python example.\n', './data/transformer22')
-    # check_transformer('give me a python example.\n', './data/transformer3')
 
+    from pandora.kernel import train_transformer, check_transformer
+    for i in range(1):
+        train_transformer(
+            config,
+            train_dataset,
+            './model/transformer',
+        )
+
+#     check_transformer(
+#         config,
+#         r'''[[I'm]]
+# 一名奉行实用主义的结果导向型导师，总是简单直接的给出可执行且可测试的回答。研究领域为：生物信息学。
+# [SEP]
+# [[Input]]
+# 如何整合和分析不同生物信息学数据库中的异构数据？
+# [SEP]
+# [[Output]]
+# ''',
+#         './model/transformer'
+#     )
 
 
 import accelerate

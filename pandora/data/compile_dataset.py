@@ -12,6 +12,9 @@
 """
 from __future__ import unicode_literals, print_function, division
 
+import io
+import json
+
 import datasets
 
 if False:
@@ -19,6 +22,7 @@ if False:
 
 import os
 from datasets import load_dataset, concatenate_datasets, load_from_disk
+from pandora.data.utils import dataset_cache
 
 cache_dir = './hugging_hub_cache'
 cpu_count = os.cpu_count()
@@ -206,8 +210,6 @@ def download_textbook_dataset(keep_in_memory=False):
     return concatenate_datasets(dataset_list)
 
 
-
-
 def generate_main_dataset(keep_in_memory=False):
     en_dataset = download_base_dataset(keep_in_memory=keep_in_memory)
     cn_dataset = download_cn_dataset(keep_in_memory=keep_in_memory)
@@ -235,12 +237,65 @@ def get_main_dataset(keep_in_memory=False):
 def get_textbook_dataset(keep_in_memory=False):
     return load_from_disk('./dataset/textbook', keep_in_memory=keep_in_memory)
 
+
+@dataset_cache
 def get_custom_answer_dataset():
     # load dataset
     with open('./custom_data/answer.jsonl', 'r', encoding='utf-8') as f:
-        data_list = [{'text': i} for i in f.read().splitlines() if i.strip() != '']
+        data_list = [json.loads(i) for i in f.read().splitlines() if i.strip() != '']
     dataset = datasets.Dataset.from_list(data_list)
+    dataset.set_format(columns=['system', 'input', 'output'])
+    dataset = dataset.map(
+        preprocess_function,
+        batched=True,
+        num_proc=cpu_count,
+        keep_in_memory=False,
+        remove_columns=dataset.column_names,
+    )
+    return dataset
+
+
+def _preprocess_custom_dataset(data):
+    data_list = []
+    for i in data['messages']:
+        str_buffer = io.StringIO()
+        for j in i:
+            str_buffer.write(f"[[{j['role']}]]\n{j['content']}\n[SEP]\n")
+        data_list.append(str_buffer.getvalue())
+    return {
+        'text': data_list,
+    }
+
+
+@dataset_cache
+def get_custom_new_answer_dataset():
+    # load dataset
+    with open('/root/autodl-tmp/project/custom_data/new_answer.jsonl', 'r', encoding='utf-8') as f:
+        data_list = [json.loads(i) for i in f.read().splitlines() if i.strip() != '']
+    dataset = datasets.Dataset.from_list(data_list)
+    dataset = dataset.map(
+        _preprocess_custom_dataset,
+        batched=True,
+        # num_proc=cpu_count,
+        keep_in_memory=False,
+        remove_columns=dataset.column_names,
+    )
+    return dataset
+
+
+def get_merge_custom_answer_dataset():
+    # load dataset
+    with open('./custom_data/merge.jsonl', 'r', encoding='utf-8') as f:
+        data_list = [json.loads(i) for i in f.read().splitlines() if i.strip() != '']
+    dataset = datasets.Dataset.from_list(data_list)
+    dataset = dataset.map(
+        _preprocess_custom_dataset,
+        batched=True,
+        num_proc=cpu_count,
+        keep_in_memory=False,
+        remove_columns=dataset.column_names,
+    )
     return dataset
 
 if __name__ == '__main__':
-    generate_full_dataset()
+    get_custom_new_answer_dataset()
