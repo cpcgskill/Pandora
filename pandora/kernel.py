@@ -29,7 +29,7 @@ import tqdm
 import accelerate
 from accelerate.local_sgd import LocalSGD
 
-from pandora.data.post_processe import get_train_dataset
+from dataproc.post_processe import get_train_dataset
 from pandora.tokenizer_ import get_tokenizer
 from pandora.CBOW import get_embedding
 from pandora.utils import WarmupScheduler, TrainCtx

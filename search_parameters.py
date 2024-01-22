@@ -20,11 +20,11 @@ import random
 
 import datasets
 
-from pandora.data.compile_dataset import get_custom_answer_dataset
-from pandora.data.post_processe import *
+from dataproc.compile_dataset import get_custom_answer_dataset
+from dataproc.post_processe import *
 from pandora.tokenizer_ import get_tokenizer
 from pandora.config import Config
-from pandora.data.utils import dataset_cache
+from dataproc.utils import dataset_cache
 
 config = Config()
 

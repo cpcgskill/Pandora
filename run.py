@@ -28,17 +28,17 @@ if False:
 # generate_pretokenize_dataset()
 # generate_train_and_test_dataset(chunk_size=512)
 
-from pandora.data.compile_dataset import get_custom_answer_dataset, get_main_dataset, get_custom_new_answer_dataset, get_merge_custom_answer_dataset
-from pandora.data.post_processe import *
+from dataproc.compile_dataset import get_custom_answer_dataset, get_main_dataset, get_custom_new_answer_dataset, get_merge_custom_answer_dataset
+from dataproc.post_processe import *
 from pandora.tokenizer_ import get_tokenizer
 from pandora.config import Config
-from pandora.data.utils import dataset_cache
+from dataproc.utils import dataset_cache
 
 config = Config()
 
 
 @dataset_cache
-def generate_train_and_test_dataset(dataset, keep_in_memory=False, chunk_size=512):
+def generate_train_and_test_dataset(dataset, keep_in_memory=False, chunk_size=512, seam=5):
     dataset = pretokenize_dataset(get_tokenizer(config), dataset, keep_in_memory=keep_in_memory)
     dataset = segmentation_dataset(dataset, chunk_size=chunk_size)
     train_dataset, test_dataset = split_dataset(dataset, keep_in_memory=keep_in_memory)
@@ -56,7 +56,7 @@ train_dataset, test_dataset = generate_extract_tail_dataset(get_merge_custom_ans
 
 
 def start():
-    from pandora.data.post_processe import get_pretokenize_dataset, get_main_dataset
+    from dataproc.post_processe import get_pretokenize_dataset, get_main_dataset
     # from pandora.CBOW import train_embedding, build_embedding
     # train_embedding(get_main_dataset(keep_in_memory=True), './data/embedding2')
     # build_embedding('./data/embedding2', '/root/autodl-fs/embedding.pt')

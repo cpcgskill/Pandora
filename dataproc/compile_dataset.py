@@ -22,7 +22,7 @@ if False:
 
 import os
 from datasets import load_dataset, concatenate_datasets, load_from_disk
-from pandora.data.utils import dataset_cache
+from dataproc.utils import dataset_cache
 
 cache_dir = './hugging_hub_cache'
 cpu_count = os.cpu_count()
@@ -283,6 +283,7 @@ def get_custom_new_answer_dataset():
     return dataset
 
 
+@dataset_cache
 def get_merge_custom_answer_dataset():
     # load dataset
     with open('./custom_data/merge.jsonl', 'r', encoding='utf-8') as f:
@@ -296,6 +297,7 @@ def get_merge_custom_answer_dataset():
         remove_columns=dataset.column_names,
     )
     return dataset
+
 
 if __name__ == '__main__':
     get_custom_new_answer_dataset()

@@ -24,6 +24,7 @@ import pandora.tokenizer_ as tokenizer_
 cache_dir = './hugging_hub_cache'
 cpu_count = os.cpu_count()
 
+
 def pretokenize_function(tokenizer, data):
     return {'ids': [i.ids for i in tokenizer.encode_batch(data['text'])]}
 
@@ -39,23 +40,23 @@ def pretokenize_dataset(tokenizer, dataset, keep_in_memory=False):
     return dataset
 
 
-def _segmentation_function(data, chunk_size=512):
+def _segmentation_function(data, chunk_size=512, seam=5):
     output = []
     for i in data['ids']:
         if len(i) < chunk_size:
             output.append(i)
         else:
-            start_ids = list(range(0, len(i), chunk_size))
+            start_ids = list(range(0, len(i), chunk_size - seam))
             output.extend(i[j:j + chunk_size] for j in start_ids[:-1])
             last_start_id = len(i) - chunk_size
             output.append(i[last_start_id:])
     return {'ids': output}
 
 
-def segmentation_dataset(dataset, chunk_size=512, keep_in_memory=False):
+def segmentation_dataset(dataset, chunk_size=512, seam=5, keep_in_memory=False):
     # segmentation
     dataset = dataset.map(
-        functools.partial(_segmentation_function, chunk_size=chunk_size),
+        functools.partial(_segmentation_function, chunk_size=chunk_size, seam=seam),
         batched=True,
         num_proc=cpu_count,
         keep_in_memory=keep_in_memory,
@@ -63,8 +64,10 @@ def segmentation_dataset(dataset, chunk_size=512, keep_in_memory=False):
     )
     return dataset
 
+
 def extract_tail_function(data, chunk_size=512):
     return {'ids': [i[-chunk_size:] for i in data['ids']]}
+
 
 def extract_tail_dataset(dataset, chunk_size=512, keep_in_memory=False):
     # segmentation
@@ -105,6 +108,7 @@ def get_main_dataset(keep_in_memory=False):
     # load from file
     dataset = load_from_disk('./dataset/main', keep_in_memory=keep_in_memory)
     return dataset
+
 
 def get_pretokenize_dataset(keep_in_memory=False):
     # load from file
