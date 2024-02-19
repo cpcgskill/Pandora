@@ -25,34 +25,7 @@ from accelerate.local_sgd import LocalSGD
 from pandora import config
 from pandora.utils import WarmupScheduler, TrainCtx
 from pandora.tokenizer_ import get_tokenizer
-
-
-# 定义CBOW模型
-class CBOW(nn.Module):
-    def __init__(self, vocab_size, embed_size):
-        super(CBOW, self).__init__()
-        self.embed = nn.Embedding(vocab_size, embed_size)
-        self.linear = nn.Linear(embed_size, vocab_size)
-
-    def forward(self, context):
-        # if is train mode
-        if self.training:
-            embeds = self.embed(context)
-            embeds_sum = torch.sum(embeds, dim=1)
-            out = self.linear(embeds_sum)
-            return out
-        else:
-            # if is eval mode
-            embeds = self.embed(context)
-            return embeds
-
-    def normal_embedding(self):
-        with torch.no_grad():
-            # normalize embeddings. ps: to 1
-            self.embed.weight.div_(self.embed.weight.norm(dim=1, keepdim=True))
-            self.linear.weight.div_(self.linear.weight.norm(dim=1, keepdim=True))
-        return self
-
+from pandora.modules import CBOW
 
 def train_embedding(dataset, train_dir):
     # accelerate

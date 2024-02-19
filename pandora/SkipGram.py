@@ -25,30 +25,7 @@ from pandora import config
 from pandora.utils import WarmupScheduler, TrainCtx
 from pandora.tokenizer_ import get_tokenizer
 
-
-# 定义SkipGram模型
-class SkipGram(nn.Module):
-    def __init__(self, vocab_size, embed_size):
-        super(SkipGram, self).__init__()
-        self.in_embed = nn.Embedding(vocab_size, embed_size)
-        self.out_embed = nn.Embedding(vocab_size, embed_size)
-
-    def forward(self, target):
-        if self.training:
-            in_embeds = self.in_embed(target)
-            scores = torch.matmul(in_embeds, self.out_embed.weight.t())
-            return scores
-        else:
-            in_embeds = self.in_embed(target)
-            return in_embeds
-
-    def normal_embedding(self):
-        with torch.no_grad():
-            # normalize embeddings. ps: to 1
-            self.in_embed.weight.div_(self.in_embed.weight.norm(dim=1, keepdim=True))
-            self.out_embed.weight.div_(self.out_embed.weight.norm(dim=1, keepdim=True))
-        return self
-
+from pandora.modules import SkipGram
 
 def make_skip_gram(tokenizer):
     return SkipGram(tokenizer.get_vocab_size(), config.module['embed_size']).normal_embedding()
