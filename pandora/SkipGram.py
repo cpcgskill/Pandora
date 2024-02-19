@@ -21,24 +21,23 @@ import tqdm
 import accelerate
 from accelerate.local_sgd import LocalSGD
 
-from pandora import config
 from pandora.utils import WarmupScheduler, TrainCtx
 from pandora.tokenizer_ import get_tokenizer
 
 from pandora.modules import SkipGram
 
-def make_skip_gram(tokenizer):
-    return SkipGram(tokenizer.get_vocab_size(), config.module['embed_size']).normal_embedding()
+def make_skip_gram(config, tokenizer):
+    return SkipGram(tokenizer.get_vocab_size(), config.embed_size).normal_embedding()
 
 
-def train_skip_gram(dataset, train_dir):
+def train_skip_gram(config, dataset, train_dir):
     # accelerate
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
 
     # make
-    tokenizer = get_tokenizer()
-    model = make_skip_gram(tokenizer)
+    tokenizer = get_tokenizer(config)
+    model = make_skip_gram(config, tokenizer)
     # train
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -46,11 +45,11 @@ def train_skip_gram(dataset, train_dir):
         # shuffle=True,
         pin_memory=True,
     )
-    optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.embed_size, weight_decay=0.01)
     scheduler = WarmupScheduler(optimizer,
                                 warmup_epochs=10,
-                                init_lr=1.0 / config.module['embed_size'] / 10,
-                                max_lr=1.0 / config.module['embed_size'],
+                                init_lr=1.0 / config.embed_size / 10,
+                                max_lr=1.0 / config.embed_size,
                                 gamma=0.97
                                 )
     loss_function = nn.CrossEntropyLoss()
@@ -129,12 +128,12 @@ def test_skip_gram(train_dir):
         shuffle=True,
         pin_memory=True,
     )
-    optimizer = torch.optim.Adagrad(skip_gram.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
+    optimizer = torch.optim.Adagrad(skip_gram.parameters(), lr=1.0 / config.embed_size, weight_decay=0.01)
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
     scheduler = WarmupScheduler(optimizer,
                                 warmup_epochs=10,
-                                init_lr=1.0 / config.module['embed_size'] / 10,
-                                max_lr=1.0 / config.module['embed_size'],
+                                init_lr=1.0 / config.embed_size / 10,
+                                max_lr=1.0 / config.embed_size,
                                 gamma=0.97
                                 )
     loss_function = nn.CrossEntropyLoss()
@@ -165,7 +164,7 @@ def test_skip_gram(train_dir):
         print(output[0, 1].dot(output[0, i]))
 
 
-def build_embedding_from_skip_gram(train_dir):
+def build_embedding_from_skip_gram(config, train_dir):
     # accelerate
     accelerator = accelerate.Accelerator()
     print('device:', accelerator.device)
@@ -174,11 +173,11 @@ def build_embedding_from_skip_gram(train_dir):
     tokenizer = get_tokenizer()
     model = make_skip_gram(tokenizer)
     # train
-    optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.module['embed_size'], weight_decay=0.01)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=1.0 / config.embed_size, weight_decay=0.01)
     scheduler = WarmupScheduler(optimizer,
                                 warmup_epochs=10,
-                                init_lr=1.0 / config.module['embed_size'] / 10,
-                                max_lr=1.0 / config.module['embed_size'],
+                                init_lr=1.0 / config.embed_size / 10,
+                                max_lr=1.0 / config.embed_size,
                                 gamma=0.97
                                 )
     loss_function = nn.CrossEntropyLoss()
@@ -200,7 +199,7 @@ def build_embedding_from_skip_gram(train_dir):
 
 def make_embedding(tokenizer):
     # make embedding
-    return nn.Embedding(tokenizer.get_vocab_size(), config.module['embed_size'])
+    return nn.Embedding(tokenizer.get_vocab_size(), config.embed_size)
 
 
 def get_embedding(tokenizer):
