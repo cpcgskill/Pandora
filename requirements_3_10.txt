@@ -1,0 +1,9 @@
+accelerate
+aidevkit
+datasets
+multiprocess==0.70.16
+openai
+requests
+tokenizers
+tqdm
+transformers

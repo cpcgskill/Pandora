@@ -30,7 +30,7 @@ import accelerate
 from accelerate.local_sgd import LocalSGD
 
 from pandora.tokenizer_ import get_tokenizer
-from pandora.CBOW import get_embedding
+from pandora.SkipGram import get_embedding
 from pandora.utils import WarmupScheduler, TrainCtx
 
 from pandora.modules import MMModel
@@ -163,7 +163,6 @@ def train_transformer(config, dataset, train_dir):
                     continue
                 # in main process
                 if (train_ctx.step + 1) % 1000 == 0:
-                    accelerator.save_state(os.path.join(train_dir, 'model_backup'))
                     accelerator.save_state(os.path.join(train_dir, 'model'))
                     train_ctx.export_loss_data(train_dir)
                     with open(os.path.join(train_dir, 'config.json'), 'w') as f:

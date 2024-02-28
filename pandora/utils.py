@@ -104,6 +104,8 @@ def save_loss_list_graph(loss_list, path):
     # 设置平均分布的参考线
     plt.grid(True)
 
+    if not os.path.isdir(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path))
     plt.savefig(path)
 
 

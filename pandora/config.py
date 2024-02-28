@@ -20,7 +20,7 @@ class Config:
     tokenizer_path = './tokenizer.json'
     # model config
     embed_size: int = 768
-    feedforward_dim: int = 768 * 8
+    feedforward_dim: int = embed_size * 8
     num_layers: int = 16
     num_heads: int = 12
     dropout: float = 0.1

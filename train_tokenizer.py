@@ -14,13 +14,19 @@ from __future__ import unicode_literals, print_function, division
 
 from dataproc.compile_dataset import get_merge_custom_answer_dataset
 from pandora.config import Config
+from pandora.tokenizer_ import train_tokenizer, get_tokenizer
 
 config = Config()
 source_dataset = get_merge_custom_answer_dataset()
 
-from pandora.tokenizer_ import train_tokenizer
+print('=' * 30, 'train_tokenizer', '=' * 30)
 
 train_tokenizer(
     config,
     source_dataset
 )
+
+tokenizer = get_tokenizer(config)
+# tokenizer.model = WordPiece.from_file(config.tokenizer_path)
+print(tokenizer.encode("Hello, y'all! How are you 😁 ?").tokens)
+print(tokenizer.encode(source_dataset[0]['text']).tokens)

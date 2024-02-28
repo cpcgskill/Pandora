@@ -14,8 +14,8 @@ from __future__ import unicode_literals, print_function, division
 
 from tokenizers import Tokenizer
 from tokenizers import normalizers
-from tokenizers.trainers import WordPieceTrainer
-from tokenizers.models import WordPiece
+from tokenizers.trainers import WordPieceTrainer, BpeTrainer
+from tokenizers.models import WordPiece, BPE
 from tokenizers.normalizers import NFD, Lowercase, StripAccents
 from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.processors import TemplateProcessing
@@ -46,7 +46,14 @@ def train_tokenizer(config, dataset):
     tokenizer = make_tokenizer()
     trainer = WordPieceTrainer(
         vocab_size=30522 * 5,
-        special_tokens=["[UNK]", "[CLS]", "[SEP]", "[EOS]", "[PAD]", "[MASK]"],
+        special_tokens=[
+            "[UNK]",
+            "[CLS]",
+            "[SEP]",
+            "[EOS]",
+            "[PAD]",
+            "[MASK]",
+        ],
     )
 
     tokenizer.train_from_iterator(
@@ -55,15 +62,6 @@ def train_tokenizer(config, dataset):
         length=len(dataset),
     )
     tokenizer.save(config.tokenizer_path)
-
-    test_tokenizer(config)
-
-
-def test_tokenizer(config):
-    tokenizer = Tokenizer.from_file(config.tokenizer_path)
-    # tokenizer.model = WordPiece.from_file(config.tokenizer_path)
-    print(tokenizer.encode("Hello, y'all! How are you 😁 ?").tokens)
-    print(tokenizer.encode("你好， 你还好吗？").tokens)
 
 
 def get_tokenizer(config) -> Tokenizer:

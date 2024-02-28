@@ -260,7 +260,7 @@ def _preprocess_custom_dataset(data):
     for i in data['messages']:
         str_buffer = io.StringIO()
         for j in i:
-            str_buffer.write(f"[[{j['role']}]]\n{j['content']}\n[SEP]\n")
+            str_buffer.write(f"[{j['role']}]\n{j['content']}\n[SEP]\n")
         data_list.append(str_buffer.getvalue())
     return {
         'text': data_list,
@@ -289,10 +289,12 @@ def get_merge_custom_answer_dataset():
     with open('./custom_data/merge.jsonl', 'r', encoding='utf-8') as f:
         data_list = [json.loads(i) for i in f.read().splitlines() if i.strip() != '']
     dataset = datasets.Dataset.from_list(data_list)
+
+    num_proc = None if os.name == 'nt' else cpu_count
     dataset = dataset.map(
         _preprocess_custom_dataset,
         batched=True,
-        num_proc=cpu_count,
+        num_proc=num_proc,
         keep_in_memory=False,
         remove_columns=dataset.column_names,
     )
